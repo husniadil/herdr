@@ -142,6 +142,7 @@ impl ClientShellConfig {
             preferences: preferences::ClientChromePreferences::default(),
             startup_config_diagnostic: None,
             startup_onboarding: false,
+            pane_only: false,
         }
     }
 
@@ -152,6 +153,11 @@ impl ClientShellConfig {
 
     pub(crate) fn with_startup_onboarding(mut self, show: bool) -> Self {
         self.startup_onboarding = show;
+        self
+    }
+
+    pub(crate) fn with_pane_only(mut self, pane_only: bool) -> Self {
+        self.pane_only = pane_only;
         self
     }
 
@@ -348,6 +354,14 @@ impl ClientShellConfig {
         tab_count: usize,
         sidebar_width: u16,
     ) -> ClientShellLayout {
+        if self.pane_only {
+            return ClientShellLayout {
+                sidebar: Rect::default(),
+                tab_bar: Rect::default(),
+                mobile_header: Rect::default(),
+                pane_surface: Rect::new(0, 0, cols, rows),
+            };
+        }
         if cols <= self.mobile_width_threshold {
             let header_height = rows.min(2);
             return ClientShellLayout {
@@ -432,6 +446,26 @@ mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
 
     use super::*;
+
+    #[test]
+    fn pane_only_layout_fills_viewport_without_chrome() {
+        let shell = ClientShellConfig::from_config(&Config::default()).with_pane_only(true);
+
+        for (cols, rows) in [(120, 40), (shell.mobile_width_threshold, 12)] {
+            let layout = shell.layout(cols, rows, false, 3, shell.sidebar_width);
+            assert_eq!(layout.sidebar, Rect::default());
+            assert_eq!(layout.tab_bar, Rect::default());
+            assert_eq!(layout.mobile_header, Rect::default());
+            assert_eq!(layout.pane_surface, Rect::new(0, 0, cols, rows));
+        }
+        assert_eq!(
+            shell.initial_surface_size(120, 40),
+            ClientSurfaceSize {
+                cols: 120,
+                rows: 40
+            }
+        );
+    }
 
     #[test]
     fn live_reload_applies_client_owned_sections() {

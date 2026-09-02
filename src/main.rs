@@ -479,6 +479,12 @@ where
         .collect()
 }
 
+fn client_launch_options(args: &[String]) -> client::ClientLaunchOptions {
+    client::ClientLaunchOptions {
+        pane_only: args.iter().any(|arg| arg == session::PANE_ONLY_FLAG),
+    }
+}
+
 fn main() -> io::Result<()> {
     let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
         Ok(args) => args,
@@ -547,7 +553,7 @@ fn main() -> io::Result<()> {
     if args.get(1).map(|s| s.as_str()) == Some("client") {
         let loaded_config = config::Config::load();
         exit_if_nested_disabled(&loaded_config.config);
-        return client::run_client();
+        return client::run_client(client_launch_options(&args));
     }
 
     if args.get(1).map(|s| s.as_str()) == Some("update") {
@@ -583,7 +589,7 @@ fn main() -> io::Result<()> {
         println!("Usage: herdr [options]");
         println!("       herdr --session <name> [options]");
         println!("       herdr --remote <ssh-target> [--session <name>]");
-        println!("       herdr session attach <name>");
+        println!("       herdr session attach <name> [--pane-only]");
         println!("       herdr completion zsh");
         println!("       herdr update [--handoff]");
         println!("       herdr channel set <stable|preview>");
@@ -677,6 +683,7 @@ fn main() -> io::Result<()> {
         println!("  --remote-keybindings <local|server>");
         println!("                      Keybindings for --remote app attach (default: local)");
         println!("  --handoff           Opt into live handoff for update or remote attach");
+        println!("  --pane-only         Show only the pane surface, without sidebar or tab bar");
         println!("  --default-config    Print default configuration and exit");
         println!("  --skill             Print the agent skill file and exit");
         println!("  --version, -V       Print version and exit");
@@ -712,6 +719,7 @@ fn main() -> io::Result<()> {
     // Reject unknown flags
     let known_flags = [
         "--session",
+        session::PANE_ONLY_FLAG,
         "--remote",
         "--remote-keybindings",
         "--version",
@@ -764,7 +772,7 @@ fn main() -> io::Result<()> {
     let loaded_config = config::Config::load();
     exit_if_nested_disabled(&loaded_config.config);
 
-    if let Err(err) = server::autodetect::auto_detect_launch() {
+    if let Err(err) = server::autodetect::auto_detect_launch(client_launch_options(&args)) {
         eprintln!("herdr: {err}");
         std::process::exit(1);
     }

@@ -285,7 +285,7 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
 /// 1. Check if a server is listening on the client socket
 /// 2. If no server → spawn server daemon → wait for socket readiness
 /// 3. Run the thin client (which connects to the server)
-pub fn auto_detect_launch() -> io::Result<()> {
+pub fn auto_detect_launch(options: crate::client::ClientLaunchOptions) -> io::Result<()> {
     let socket_path = client_socket_path();
     info!(path = %socket_path.display(), "auto-detect launch starting");
 
@@ -300,7 +300,7 @@ pub fn auto_detect_launch() -> io::Result<()> {
     }
 
     // Now attach as a thin client.
-    crate::client::run_client()
+    crate::client::run_client(options)
 }
 
 // ---------------------------------------------------------------------------

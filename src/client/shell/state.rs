@@ -107,6 +107,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) preferences: preferences::ClientChromePreferences,
     pub(super) startup_config_diagnostic: Option<String>,
     pub(super) startup_onboarding: bool,
+    /// Hide the sidebar, tab bar, and mobile header so the pane surface fills the viewport.
+    pub(super) pane_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

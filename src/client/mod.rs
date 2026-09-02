@@ -316,8 +316,15 @@ enum ClientLoopEvent {
 /// and enters the main event loop.
 ///
 /// This is the entry point called from `main.rs` when running in client mode.
-pub fn run_client() -> io::Result<()> {
-    run_client_with_mode(None, None, "connecting to server")
+/// Client-local launch choices that never reach the server.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClientLaunchOptions {
+    /// Hide the sidebar and tab bar so the pane surface fills the host terminal.
+    pub pane_only: bool,
+}
+
+pub fn run_client(options: ClientLaunchOptions) -> io::Result<()> {
+    run_client_with_mode(None, None, options, "connecting to server")
 }
 
 /// Runs a direct terminal attach client.
@@ -326,6 +333,7 @@ pub fn run_terminal_attach(terminal_id: String, takeover: bool) -> io::Result<()
     run_client_with_mode(
         Some((terminal_id, takeover)),
         Some(AttachEscapeState::default()),
+        ClientLaunchOptions::default(),
         "attaching to terminal",
     )
 }
@@ -343,6 +351,7 @@ pub fn run_terminal_attach(_terminal_id: String, _takeover: bool) -> io::Result<
 fn run_client_with_mode(
     attach_request: Option<(String, bool)>,
     attach_escape: Option<AttachEscapeState>,
+    options: ClientLaunchOptions,
     log_message: &'static str,
 ) -> io::Result<()> {
     init_logging();
@@ -364,6 +373,7 @@ fn run_client_with_mode(
             .with_startup_onboarding(loaded_config.config.should_show_onboarding())
             .with_keybinding_source(keybinding_source)
             .with_local_endpoint(&socket_path)
+            .with_pane_only(options.pane_only)
     });
     let mouse_capture = loaded_config.config.ui.mouse_capture;
     let mouse_scroll_lines = loaded_config.config.ui.mouse_scroll_lines();

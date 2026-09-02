@@ -26,6 +26,9 @@ pub struct SessionInfo {
     pub session_dir: String,
 }
 
+/// Client launch flag that hides the sidebar and tab bar around the pane surface.
+pub const PANE_ONLY_FLAG: &str = "--pane-only";
+
 pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
     let mut cleaned = Vec::with_capacity(args.len());
     if let Some(program) = args.first() {
@@ -44,10 +47,13 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
         let Some(name) = args.get(3) else {
             return Err("usage: herdr session attach <name>".to_string());
         };
-        if args.len() != 4 {
-            return Err("usage: herdr session attach <name>".to_string());
+        if args[4..].iter().any(|arg| arg != PANE_ONLY_FLAG) {
+            return Err(format!(
+                "usage: herdr session attach <name> [{PANE_ONLY_FLAG}]"
+            ));
         }
         apply_explicit_name(name)?;
+        cleaned.extend(args[4..].iter().cloned());
         return Ok(cleaned);
     }
 
@@ -703,6 +709,28 @@ mod tests {
         assert_eq!(cleaned, args);
         assert!(std::env::var(SESSION_ENV_VAR).is_err());
         assert!(!explicit_session_requested());
+    }
+
+    #[test]
+    fn configure_from_args_keeps_pane_only_flag_for_session_attach() {
+        let _guard = env_lock().lock().unwrap();
+        clear_explicit_session_for_test();
+        let args = vec![
+            "herdr".to_string(),
+            "session".to_string(),
+            "attach".to_string(),
+            "work".to_string(),
+            PANE_ONLY_FLAG.to_string(),
+        ];
+
+        let cleaned = configure_from_args(&args).unwrap();
+
+        assert_eq!(cleaned, vec!["herdr", PANE_ONLY_FLAG]);
+        let mut rejected = args[..4].to_vec();
+        rejected.push("--bogus".to_string());
+        assert!(configure_from_args(&rejected).is_err());
+        std::env::remove_var(SESSION_ENV_VAR);
+        clear_explicit_session_for_test();
     }
 
     #[test]
