@@ -147,6 +147,8 @@ pub struct App {
     /// Parsed `ui.window_title` plus the hostname resolved when it was applied.
     window_title_template: Option<(crate::config::WindowTitleTemplate, String)>,
     pub(crate) persist_pane_history: bool,
+    /// `session.open_default_workspace`: open a workspace when the list is empty.
+    pub(crate) open_default_workspace: bool,
     /// Last render-loop attempt, including a throttled hidden-only PTY skip.
     pub(crate) last_render_at: Option<Instant>,
     /// Last attempt that could update a connected presentation surface.
@@ -607,6 +609,7 @@ impl App {
             next_tab_bar_datetime_refresh: None,
             window_title_template: None,
             persist_pane_history: config.experimental.pane_history,
+            open_default_workspace: config.session.open_default_workspace,
             last_render_at: None,
             last_presentation_at: None,
             api_rx,
@@ -692,7 +695,7 @@ impl App {
     }
 
     pub(crate) fn ensure_default_workspace(&mut self) -> bool {
-        if !self.state.workspaces.is_empty() {
+        if !self.open_default_workspace || !self.state.workspaces.is_empty() {
             return false;
         }
 
@@ -884,6 +887,10 @@ impl App {
             } else {
                 self.state.headless_size = config.headless_size();
             }
+        }
+
+        if !invalid_section("session") {
+            self.open_default_workspace = config.session.open_default_workspace;
         }
 
         if !invalid_section("advanced") {
@@ -3122,6 +3129,59 @@ mod tests {
 
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = std::fs::remove_dir_all(config_home);
+    }
+
+    #[tokio::test]
+    async fn ensure_default_workspace_opens_one_when_empty_by_default() {
+        let mut app = test_app();
+        app.state.workspaces.clear();
+        app.state.active = None;
+        assert!(app.open_default_workspace);
+
+        assert!(app.ensure_default_workspace());
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert!(!app.ensure_default_workspace());
+        assert_eq!(app.state.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn ensure_default_workspace_leaves_list_empty_when_disabled() {
+        let mut app = test_app();
+        app.open_default_workspace = false;
+        let workspace = Workspace::test_new("last");
+        let pane = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id: pane,
+            exit_reason: crate::platform::ChildExitReason::Interrupted,
+        });
+        assert!(app.state.workspaces.is_empty());
+
+        assert!(!app.ensure_default_workspace());
+        assert!(app.state.workspaces.is_empty());
+        assert_eq!(app.state.active, None);
+    }
+
+    #[test]
+    fn reload_config_applies_open_default_workspace() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-config-open-default-workspace");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "[session]\nopen_default_workspace = false\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        assert!(app.open_default_workspace);
+        let report = app.reload_config();
+
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+        assert!(!app.open_default_workspace);
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

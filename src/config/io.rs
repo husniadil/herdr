@@ -891,11 +891,13 @@ mod tests {
             r#"
 [session]
 resume_agents_on_restore = true
+open_default_workspace = false
 "#,
         )
         .unwrap();
 
         assert!(loaded.config.session.resume_agents_on_restore);
+        assert!(!loaded.config.session.open_default_workspace);
         assert!(loaded.diagnostics.is_empty());
         assert!(loaded.invalid_sections.is_empty());
     }

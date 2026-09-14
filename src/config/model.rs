@@ -268,12 +268,16 @@ pub struct SessionConfig {
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
+    /// Open a workspace automatically when a client is attached and the
+    /// session has none. Default: true.
+    pub open_default_workspace: bool,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             resume_agents_on_restore: true,
+            open_default_workspace: true,
         }
     }
 }
@@ -1399,6 +1403,20 @@ resume_agents_on_restore = false
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.session.resume_agents_on_restore);
+    }
+
+    #[test]
+    fn open_default_workspace_defaults_on_and_parses() {
+        let default_config = Config::default();
+        assert!(default_config.session.open_default_workspace);
+
+        let toml = r#"
+[session]
+open_default_workspace = false
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(!config.session.open_default_workspace);
+        assert!(config.session.resume_agents_on_restore);
     }
 
     #[test]

@@ -631,6 +631,37 @@ async fn client_shell_attach_seeds_workspace() {
 }
 
 #[tokio::test]
+async fn client_shell_attach_keeps_empty_session_when_default_workspace_disabled() {
+    let mut server = test_headless_server();
+    server.app.state.workspaces.clear();
+    server.app.state.active = None;
+    server.app.state.mode = crate::app::Mode::Navigate;
+    server.app.open_default_workspace = false;
+    let (writer, _control_rx, render_rx) = test_client_writer();
+
+    server.handle_server_event(ServerEvent::ClientShellConnected {
+        client_id: 7,
+        surface_cols: 80,
+        surface_rows: 23,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        pixel_mouse: false,
+        direct_graphics: false,
+        endpoint_keybindings: false,
+        mouse_capture: false,
+        surface_active: true,
+        writer,
+    });
+    server.render_and_stream();
+
+    assert!(server.app.state.workspaces.is_empty());
+    assert_eq!(server.app.state.active, None);
+    assert_eq!(server.app.state.mode, crate::app::Mode::Navigate);
+    assert!(render_rx.try_recv().is_ok());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn client_shell_endpoint_request_uses_the_selected_connection() {
     let mut server = test_headless_server();
     server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("endpoint")];
