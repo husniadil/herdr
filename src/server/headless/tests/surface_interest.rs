@@ -68,6 +68,7 @@ async fn metadata_only_shell_is_isolated_until_surface_activation() {
             surface_delta: false,
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id,
             surface_cols: 101,
             surface_rows: 37,
@@ -284,6 +285,7 @@ async fn background_surface_activation_preserves_focused_viewer_geometry() {
     let (writer, background_control, _) = test_client_writer();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            snapshot_acks: false,
             surface_reuse: false,
             surface_delta: false,
             workspace_id: None,
@@ -403,6 +405,7 @@ async fn presentation_sync_epoch_replays_modes_and_title() {
             surface_delta: false,
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id,
             surface_cols: 80,
             surface_rows: 24,
@@ -521,6 +524,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
             surface_delta: false,
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id: source_client_id,
             surface_cols: 80,
             surface_rows: 24,
@@ -550,6 +554,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
             surface_delta: false,
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id: target_client_id,
             surface_cols: 80,
             surface_rows: 24,

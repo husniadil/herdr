@@ -183,6 +183,13 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_agent_view: Option<crate::api::schema::AgentViewSetParams>,
     /// Monotonic shell replacement revision for this connection.
     pub(crate) shell_projection_revision: u64,
+    /// Whether this shell said in its hello that it acknowledges applied snapshots.
+    pub(crate) shell_snapshot_acks: bool,
+    /// Latest snapshot revision this shell acknowledged applying.
+    pub(crate) shell_applied_revision: Option<u64>,
+    /// First sent revision whose view (workspace, tab, focused pane, zoom) matches
+    /// `shell_snapshot`'s.
+    pub(crate) shell_view_revision: u64,
     /// Whether this shell is waiting for one ordered endpoint command response.
     pub(crate) shell_endpoint_command_in_flight: bool,
     /// Surface projection epoch that owned the in-flight command. Deferred navigation may run
@@ -251,6 +258,9 @@ impl ClientConnection {
             shell_snapshot: None,
             shell_agent_view: None,
             shell_projection_revision: 0,
+            shell_snapshot_acks: false,
+            shell_applied_revision: None,
+            shell_view_revision: 0,
             shell_endpoint_command_in_flight: false,
             shell_endpoint_command_surface_revision: None,
             shell_deferred_navigation_request_id: None,

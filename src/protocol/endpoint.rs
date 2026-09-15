@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ClientShellSnapshot, ClientSurfaceSize, ServerMessage};
+use super::{ClientMessage, ClientShellSnapshot, ClientSurfaceSize, ServerMessage};
 
 pub const ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
 pub const ENDPOINT_HELLO_KIND: &str = "endpoint.hello.v1";
@@ -32,6 +32,12 @@ pub const AGENT_VIEW_PROJECTION_KIND: &str = "endpoint.agent-view.v1";
 /// The server honours `workspace_id` and `client_tag` in the hello and serves the
 /// per-client view methods (`client.list`, `client.view.focus`).
 pub const CLIENT_VIEW_FOCUS_CAPABILITY: &str = "client_view_focus";
+/// The server records `endpoint.snapshot.applied.v1` acknowledgements from clients whose
+/// hello set `snapshot_acks`, reports them in `client.list`, and serves `client.view.wait`.
+pub const CLIENT_VIEW_ACK_CAPABILITY: &str = "client_view_ack";
+/// Client to server: the snapshot a client now routes input through. Data is
+/// [`EndpointSnapshotApplied`] as JSON.
+pub const SNAPSHOT_APPLIED_KIND: &str = "endpoint.snapshot.applied.v1";
 /// Longest client tag a server accepts, in bytes.
 pub const CLIENT_TAG_MAX_BYTES: usize = 128;
 
@@ -73,6 +79,28 @@ pub struct EndpointClientHello {
     /// `client.view.focus`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_tag: Option<String>,
+    /// This client sends [`SNAPSHOT_APPLIED_KIND`] after it applies a snapshot, when
+    /// the server advertises [`CLIENT_VIEW_ACK_CAPABILITY`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub snapshot_acks: bool,
+}
+
+/// A client's acknowledgement that the snapshot with this boot and revision is the
+/// one its input is routed through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointSnapshotApplied {
+    pub boot_id: String,
+    pub revision: u64,
+}
+
+pub fn snapshot_applied_message(boot_id: &str, revision: u64) -> serde_json::Result<ClientMessage> {
+    Ok(ClientMessage::EndpointControl {
+        kind: SNAPSHOT_APPLIED_KIND.into(),
+        data: serde_json::to_string(&EndpointSnapshotApplied {
+            boot_id: boot_id.to_owned(),
+            revision,
+        })?,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,6 +211,7 @@ impl EndpointServerWelcome {
                 HEALTH_CHECK_CAPABILITY.into(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.into(),
                 CLIENT_VIEW_FOCUS_CAPABILITY.into(),
+                CLIENT_VIEW_ACK_CAPABILITY.into(),
             ],
             error: None,
         }
@@ -229,6 +258,7 @@ mod tests {
             blob_codecs: vec![BLOB_CODEC_V1.into()],
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
         }
     }
 
@@ -392,7 +422,42 @@ mod tests {
                 HEALTH_CHECK_CAPABILITY.to_string(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.to_string(),
                 CLIENT_VIEW_FOCUS_CAPABILITY.to_string(),
+                CLIENT_VIEW_ACK_CAPABILITY.to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn hello_without_snapshot_acks_serializes_as_before_and_decodes_as_false() {
+        let value = serde_json::to_value(hello()).unwrap();
+        assert!(value.get("snapshot_acks").is_none());
+        let frozen: EndpointClientHello = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-hello-v1.json"
+        )))
+        .unwrap();
+        assert!(!frozen.snapshot_acks);
+
+        let mut value = value;
+        value["snapshot_acks"] = serde_json::json!(true);
+        let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
+        assert!(decoded.snapshot_acks);
+    }
+
+    #[test]
+    fn snapshot_applied_uses_a_named_json_control() {
+        let ClientMessage::EndpointControl { kind, data } =
+            snapshot_applied_message("boot", 7).unwrap()
+        else {
+            panic!("snapshot acknowledgement should use endpoint control");
+        };
+        assert_eq!(kind, SNAPSHOT_APPLIED_KIND);
+        assert_eq!(
+            serde_json::from_str::<EndpointSnapshotApplied>(&data).unwrap(),
+            EndpointSnapshotApplied {
+                boot_id: "boot".into(),
+                revision: 7,
+            }
         );
     }
 

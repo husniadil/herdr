@@ -1013,7 +1013,7 @@ impl App {
                     },
                 );
             }
-            Method::ClientViewFocus(_) => {
+            Method::ClientViewFocus(_) | Method::ClientViewWait(_) => {
                 return responses::encode_error(
                     request.id,
                     "client_not_found",
@@ -1824,6 +1824,8 @@ mod tests {
                     client_tag: Some("browser".into()),
                     workspace_id: "w_1".into(),
                     tab_id: None,
+                    wait: false,
+                    timeout_ms: None,
                 },
             ),
         });

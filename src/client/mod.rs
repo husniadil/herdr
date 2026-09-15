@@ -605,6 +605,14 @@ async fn run_client_loop(
     #[cfg(windows)]
     let mut stdin_open = true;
     while !should_quit.load(Ordering::Acquire) {
+        // Snapshots applied during the last event collapse into one acknowledgement.
+        if let Some(shell) = state.shell.as_mut() {
+            if let Some((endpoint_id, boot_id, revision)) = shell.unacknowledged_snapshot() {
+                if write_stream.acknowledge_applied_snapshot(endpoint_id, boot_id, revision) {
+                    shell.clear_unacknowledged_snapshot();
+                }
+            }
+        }
         if pending_activation.is_none() {
             if let Some(reload) = pending_catalog.take() {
                 match reload {

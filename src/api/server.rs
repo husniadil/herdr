@@ -72,6 +72,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         surface_interest: true,
         health_check: true,
         client_view_focus: true,
+        client_view_ack: true,
     })
 }
 
@@ -399,6 +400,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::ClientWindowTitleClear(_) => "client.window_title.clear",
         Method::ClientList(_) => "client.list",
         Method::ClientViewFocus(_) => "client.view.focus",
+        Method::ClientViewWait(_) => "client.view.wait",
         Method::ClientShellSurfaceSet(_) => "client_shell.surface.set",
         Method::SessionSnapshot(_) => "session.snapshot",
         Method::WorkspaceCreate(_) => "workspace.create",
@@ -1154,6 +1156,7 @@ mod tests {
                 surface_interest: true,
                 health_check: true,
                 client_view_focus: true,
+                client_view_ack: true,
             }),
             None,
             None,
@@ -1180,6 +1183,24 @@ mod tests {
 
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed["result"]["capabilities"]["client_view_focus"], true);
+    }
+
+    #[test]
+    fn ping_advertises_client_view_ack() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let response = handle_request(
+            Request {
+                id: "req_view_ack".into(),
+                method: Method::Ping(crate::api::schema::PingParams::default()),
+            },
+            &tx,
+            default_capabilities(),
+            None,
+            None,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["result"]["capabilities"]["client_view_ack"], true);
     }
 
     #[test]

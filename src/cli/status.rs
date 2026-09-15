@@ -423,6 +423,7 @@ mod tests {
                 surface_interest: true,
                 health_check: true,
                 client_view_focus: false,
+                client_view_ack: false,
             }),
         }
     }

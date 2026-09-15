@@ -2387,3 +2387,33 @@ fn navigator_foreign_tab_selection_keeps_the_tab_target() {
         }] if activated == &endpoint_id && tab_id == "tab_1"
     ));
 }
+
+#[test]
+fn only_the_active_snapshot_waits_to_be_acknowledged() {
+    let (mut state, remote) = state_with_remote();
+    assert_eq!(
+        state.unacknowledged_snapshot(),
+        Some((&ClientEndpointId::Local, "boot-1", 1)),
+        "caching the inactive remote snapshot leaves the active one to acknowledge"
+    );
+    state.clear_unacknowledged_snapshot();
+
+    let mut newer = snapshot();
+    newer.revision = 2;
+    state.set_snapshot(Box::new(newer));
+    let mut newest = snapshot();
+    newest.revision = 3;
+    state.set_snapshot(Box::new(newest));
+    assert_eq!(
+        state.unacknowledged_snapshot(),
+        Some((&ClientEndpointId::Local, "boot-1", 3)),
+        "snapshots applied before the next acknowledgement collapse into the latest"
+    );
+
+    state.clear_unacknowledged_snapshot();
+    assert!(state.activate_endpoint_projection(&remote));
+    assert_eq!(
+        state.unacknowledged_snapshot(),
+        Some((&remote, "remote-boot", 1))
+    );
+}

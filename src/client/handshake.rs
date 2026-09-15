@@ -192,6 +192,7 @@ pub(super) fn do_handshake(
             blob_codecs: vec![BLOB_CODEC_V1.into()],
             workspace_id: view.workspace_id.clone(),
             client_tag: view.client_tag.clone(),
+            snapshot_acks: true,
         };
         ClientMessage::EndpointControl {
             kind: ENDPOINT_HELLO_KIND.into(),
