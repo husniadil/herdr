@@ -71,6 +71,10 @@ pub enum Method {
     ClientWindowTitleSet(ClientWindowTitleSetParams),
     #[serde(rename = "client.window_title.clear")]
     ClientWindowTitleClear(EmptyParams),
+    #[serde(rename = "client.list")]
+    ClientList(EmptyParams),
+    #[serde(rename = "client.view.focus")]
+    ClientViewFocus(ClientViewFocusParams),
     #[serde(rename = "client_shell.surface.set")]
     ClientShellSurfaceSet(ClientShellSurfaceSetParams),
     #[serde(rename = "session.snapshot")]
