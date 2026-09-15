@@ -1004,6 +1004,22 @@ impl App {
                     },
                 );
             }
+            // Clients connect to the headless server, which answers these itself.
+            Method::ClientList(_) => {
+                return responses::encode_success(
+                    request.id,
+                    ResponseResult::ClientList {
+                        clients: Vec::new(),
+                    },
+                );
+            }
+            Method::ClientViewFocus(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "client_not_found",
+                    "no clients are connected",
+                );
+            }
             Method::SessionSnapshot(_) => return self.handle_session_snapshot(request.id),
             Method::WorkspaceList(_) => return self.handle_workspace_list(request.id),
             Method::WorkspaceGet(target) => return self.handle_workspace_get(request.id, target),
@@ -1777,6 +1793,42 @@ mod tests {
         let clear: serde_json::Value = serde_json::from_str(&clear).unwrap();
         assert_eq!(clear["result"]["type"], "client_window_title");
         assert_eq!(clear["result"]["reason"], "no_foreground_client");
+    }
+
+    #[test]
+    fn client_view_api_has_no_clients_in_app_mode() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+
+        let list = app.handle_api_request(crate::api::schema::Request {
+            id: "client_list".into(),
+            method: crate::api::schema::Method::ClientList(
+                crate::api::schema::EmptyParams::default(),
+            ),
+        });
+        let list: serde_json::Value = serde_json::from_str(&list).unwrap();
+        assert_eq!(list["result"]["type"], "client_list");
+        assert_eq!(list["result"]["clients"], serde_json::json!([]));
+
+        let focus = app.handle_api_request(crate::api::schema::Request {
+            id: "client_view_focus".into(),
+            method: crate::api::schema::Method::ClientViewFocus(
+                crate::api::schema::ClientViewFocusParams {
+                    client_id: None,
+                    client_tag: Some("browser".into()),
+                    workspace_id: "w_1".into(),
+                    tab_id: None,
+                },
+            ),
+        });
+        let focus: serde_json::Value = serde_json::from_str(&focus).unwrap();
+        assert_eq!(focus["error"]["code"], "client_not_found");
     }
 
     #[cfg(unix)]

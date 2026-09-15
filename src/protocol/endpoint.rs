@@ -29,6 +29,11 @@ pub const HEALTH_PING_KIND: &str = "endpoint.health.ping.v1";
 pub const HEALTH_PONG_KIND: &str = "endpoint.health.pong.v1";
 pub const AGENT_VIEW_PROJECTION_CAPABILITY: &str = "agent_view_projection";
 pub const AGENT_VIEW_PROJECTION_KIND: &str = "endpoint.agent-view.v1";
+/// The server honours `workspace_id` and `client_tag` in the hello and serves the
+/// per-client view methods (`client.list`, `client.view.focus`).
+pub const CLIENT_VIEW_FOCUS_CAPABILITY: &str = "client_view_focus";
+/// Longest client tag a server accepts, in bytes.
+pub const CLIENT_TAG_MAX_BYTES: usize = 128;
 
 fn default_true() -> bool {
     true
@@ -57,6 +62,14 @@ pub struct EndpointClientHello {
     pub input_codecs: Vec<String>,
     #[serde(default)]
     pub blob_codecs: Vec<String>,
+    /// Workspace this connection should show first. A server without
+    /// `client_view_focus` ignores it and shows its own focus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// Caller-chosen label that addresses this connection in `client.list` and
+    /// `client.view.focus`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +127,24 @@ pub fn agent_view_projection_message(
     })
 }
 
+/// Checks a caller-chosen client tag: non-empty, at most
+/// [`CLIENT_TAG_MAX_BYTES`], and free of control characters so it prints and
+/// matches predictably.
+pub fn validate_client_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty() {
+        return Err("client tag is empty".into());
+    }
+    if tag.len() > CLIENT_TAG_MAX_BYTES {
+        return Err(format!(
+            "client tag is longer than {CLIENT_TAG_MAX_BYTES} bytes"
+        ));
+    }
+    if tag.chars().any(char::is_control) {
+        return Err("client tag contains a control character".into());
+    }
+    Ok(())
+}
+
 impl EndpointClientHello {
     pub fn supports_required_codecs(&self) -> bool {
         self.snapshot_codecs
@@ -147,6 +178,7 @@ impl EndpointServerWelcome {
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
                 HEALTH_CHECK_CAPABILITY.into(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.into(),
+                CLIENT_VIEW_FOCUS_CAPABILITY.into(),
             ],
             error: None,
         }
@@ -190,6 +222,8 @@ mod tests {
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
             blob_codecs: vec![BLOB_CODEC_V1.into()],
+            workspace_id: None,
+            client_tag: None,
         }
     }
 
@@ -349,8 +383,35 @@ mod tests {
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.to_string(),
                 HEALTH_CHECK_CAPABILITY.to_string(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.to_string(),
+                CLIENT_VIEW_FOCUS_CAPABILITY.to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn hello_without_view_fields_serializes_as_before() {
+        let value = serde_json::to_value(hello()).unwrap();
+        assert!(value.get("workspace_id").is_none());
+        assert!(value.get("client_tag").is_none());
+    }
+
+    #[test]
+    fn hello_carries_optional_workspace_and_client_tag() {
+        let mut value = serde_json::to_value(hello()).unwrap();
+        value["workspace_id"] = serde_json::json!("w_2");
+        value["client_tag"] = serde_json::json!("browser-1");
+        let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.workspace_id.as_deref(), Some("w_2"));
+        assert_eq!(decoded.client_tag.as_deref(), Some("browser-1"));
+    }
+
+    #[test]
+    fn client_tag_validation_rejects_empty_long_and_control_text() {
+        assert!(validate_client_tag("browser-1").is_ok());
+        assert!(validate_client_tag("").is_err());
+        assert!(validate_client_tag(&"x".repeat(CLIENT_TAG_MAX_BYTES + 1)).is_err());
+        assert!(validate_client_tag(&"x".repeat(CLIENT_TAG_MAX_BYTES)).is_ok());
+        assert!(validate_client_tag("tab\u{1b}").is_err());
     }
 
     #[test]

@@ -173,6 +173,8 @@ pub(crate) struct ClientConnection {
     shell_held_inputs: HashMap<ClientShellPressId, ClientShellHeldInput>,
     /// Temporary files staged from this client's local clipboard image pastes.
     pub(crate) staged_clipboard_files: Vec<PathBuf>,
+    /// Caller-chosen label from the endpoint hello that addresses this connection.
+    pub(crate) client_tag: Option<String>,
     /// Connection-local workspace and tab projection for a client-owned shell.
     pub(crate) shell_location: Option<ClientShellLocation>,
     /// Last coherent shell replacement sent to this client.
@@ -244,6 +246,7 @@ impl ClientConnection {
             host_keyboard_protocol_active: None,
             shell_held_inputs: HashMap::new(),
             staged_clipboard_files: Vec::new(),
+            client_tag: None,
             shell_location: None,
             shell_snapshot: None,
             shell_agent_view: None,

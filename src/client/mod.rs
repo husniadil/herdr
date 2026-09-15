@@ -37,6 +37,7 @@ mod terminal_sessions;
 mod terminal_setup;
 mod timer;
 mod transport;
+mod view_request;
 
 #[cfg(test)]
 use clipboard_forwarding::decode_clipboard_payload;
@@ -54,6 +55,7 @@ use transport::*;
 pub(crate) use shell::{ClientShellConfig, ClientShellState};
 pub use startup::{run_client, run_terminal_attach};
 pub use terminal_sessions::{run_terminal_session_control, run_terminal_session_observe};
+pub use view_request::{extract_launch_view_args, ClientViewRequest};
 
 #[cfg(not(windows))]
 use terminal_geometry::query_host_terminal_appearance;
@@ -144,6 +146,7 @@ use crate::server::socket_paths::client_socket_path;
 fn run_client_with_mode(
     attach_request: Option<(String, bool)>,
     attach_escape: Option<AttachEscapeState>,
+    view: ClientViewRequest,
     log_message: &'static str,
 ) -> io::Result<()> {
     init_logging();
@@ -243,6 +246,7 @@ fn run_client_with_mode(
                 endpoint_keybindings,
                 loop_config.mouse_capture_active,
                 true,
+                &view,
             )
             .map_err(|error| io::Error::other(error.to_string()))?;
             if federated
@@ -327,6 +331,7 @@ fn run_client_with_mode(
             should_quit,
             loop_config,
             attach_escape,
+            view,
         )
         .await
     });
@@ -377,6 +382,7 @@ async fn run_client_loop(
     should_quit: Arc<AtomicBool>,
     config: ClientLoopConfig,
     attach_escape: Option<AttachEscapeState>,
+    view: ClientViewRequest,
 ) -> Result<(), ClientError> {
     #[cfg(windows)]
     let _ = config.mouse_scroll_lines;
@@ -564,6 +570,7 @@ async fn run_client_loop(
             write_stream
                 .connection(&endpoint::ClientEndpointId::Local)
                 .map(|connection| connection.generation),
+            view.clone(),
             std::time::Instant::now(),
         );
     }
@@ -606,6 +613,7 @@ async fn run_client_loop(
                                 write_stream
                                     .connection(&endpoint::ClientEndpointId::Local)
                                     .map(|connection| connection.generation),
+                                view.clone(),
                                 now,
                             );
                             if write_stream
@@ -695,6 +703,7 @@ async fn run_client_loop(
                     endpoint_keybindings: config.endpoint_keybindings,
                     mouse_capture: state.shell_mouse_capture_preference,
                 },
+                shell.endpoint_focused_workspace_id(&endpoint::ClientEndpointId::Local),
                 &supervisor_tx,
             );
         }

@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "client_view_focus.rs"]
+mod client_view_focus_tests;
 #[path = "pane_graphics.rs"]
 mod pane_graphics_tests;
 #[path = "surface_interest.rs"]
@@ -687,6 +689,8 @@ async fn client_shell_attach_seeds_workspace() {
 
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: None,
             surface_reuse: false,
             client_id: 6,
             surface_cols: 80,
@@ -718,6 +722,8 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
     let client_id = 41;
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: None,
             surface_reuse: false,
             client_id,
             surface_cols: 80,
@@ -835,6 +841,8 @@ async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots(
     let (writer, control_rx, _render_rx) = test_client_writer();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: None,
             surface_reuse: false,
             client_id: 77,
             surface_cols: 80,
@@ -944,6 +952,8 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     let (writer, control_rx, render_rx) = test_client_writer();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: None,
             surface_reuse: false,
             client_id: 7,
             surface_cols: 80,
@@ -1112,6 +1122,8 @@ fn connect_test_shell(
     let (writer, control, render) = test_client_writer();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: None,
             surface_reuse: false,
             client_id,
             surface_cols,
@@ -1574,6 +1586,8 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
     let (local_writer, local_control, _local_render) = test_client_writer();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: None,
             surface_reuse: false,
             client_id: 13,
             surface_cols: 80,
@@ -1599,6 +1613,8 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
     let (endpoint_writer, endpoint_control, _endpoint_render) = test_client_writer();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: None,
             surface_reuse: false,
             client_id: 14,
             surface_cols: 80,
@@ -2502,6 +2518,8 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
     let (writer, control_rx, render_rx) = test_client_writer();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: None,
             surface_reuse: false,
             client_id: 9,
             surface_cols: 80,
@@ -2753,6 +2771,8 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
     let (writer, control_rx, render_rx) = test_client_writer();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: None,
             surface_reuse: false,
             client_id: 12,
             surface_cols: 80,
