@@ -377,11 +377,17 @@ one of `client_id` or `client_tag`:
 ```
 
 `tab_id` is optional and must belong to `workspace_id`; without it the client shows
-the tab it last showed in that workspace. The moved client is repainted and, when a
+the tab it last showed in that workspace. `pane_id` is optional too: the client is
+moved onto that pane's tab and the tab's focused pane becomes this one, as a click on
+it would, with the tab's zoom left as it is. It must be in `workspace_id`, and in
+`tab_id` when that is given. A server that honours `pane_id` reports
+`capabilities.client_view_pane: true` from `ping`. The moved client is repainted and, when a
 window title is configured or set through `client.window_title.set`, sent the title
 for its new view. Errors are `invalid_params` (both or neither address given),
 `client_not_found`, `ambiguous_client` (a tag shared by several clients; address one
-by `client_id`), `workspace_not_found`, and `tab_not_found`.
+by `client_id`), `workspace_not_found`, `tab_not_found`, and `pane_not_found` (a
+`pane_id` outside the workspace, or outside `tab_id`), each answered before the
+view moves.
 
 A move or a `pane.zoom` answers before the client has the new view, and a client
 routes typed input to the pane its own latest snapshot names. A server that reports

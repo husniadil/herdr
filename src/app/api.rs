@@ -1872,6 +1872,7 @@ mod tests {
                     client_tag: Some("browser".into()),
                     workspace_id: "w_1".into(),
                     tab_id: None,
+                    pane_id: None,
                     wait: false,
                     timeout_ms: None,
                 },
