@@ -75,6 +75,8 @@ pub enum Method {
     ClientList(EmptyParams),
     #[serde(rename = "client.view.focus")]
     ClientViewFocus(ClientViewFocusParams),
+    #[serde(rename = "client.view.wait")]
+    ClientViewWait(ClientViewWaitParams),
     #[serde(rename = "client_shell.surface.set")]
     ClientShellSurfaceSet(ClientShellSurfaceSetParams),
     #[serde(rename = "session.snapshot")]

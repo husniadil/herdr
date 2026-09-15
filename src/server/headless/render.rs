@@ -654,6 +654,13 @@ impl HeadlessServer {
                         broken_clients.push(client_id);
                         continue;
                     }
+                    let view =
+                        crate::server::client_shell::ClientShellView::of_snapshot(&candidate);
+                    if client.shell_snapshot.as_ref().is_none_or(|sent| {
+                        crate::server::client_shell::ClientShellView::of_snapshot(sent) != view
+                    }) {
+                        client.shell_view_revision = client.shell_projection_revision;
+                    }
                     client.shell_snapshot = Some(candidate);
                     client.shell_agent_completions = Some(completions);
                     client.shell_agent_view = agent_view;

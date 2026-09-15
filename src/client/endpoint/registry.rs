@@ -269,6 +269,39 @@ impl EndpointRegistry {
         self.send_to(&endpoint_id, message)
     }
 
+    /// Tells an endpoint which snapshot this client now routes input through, when the
+    /// endpoint advertises `client_view_ack`. Returns false while the active surface cannot
+    /// take input yet, so the caller keeps the acknowledgement for later. A snapshot of an
+    /// endpoint that is no longer active, or of one without the capability, is dropped.
+    pub(crate) fn acknowledge_applied_snapshot(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        boot_id: &str,
+        revision: u64,
+    ) -> bool {
+        if &self.active != endpoint_id
+            || !self.connections.get(endpoint_id).is_some_and(|connection| {
+                connection
+                    .negotiation
+                    .supports_capability(crate::protocol::endpoint::CLIENT_VIEW_ACK_CAPABILITY)
+            })
+        {
+            return true;
+        }
+        if !self.active_surface_available() {
+            return false;
+        }
+        match crate::protocol::endpoint::snapshot_applied_message(boot_id, revision) {
+            Ok(message) => {
+                self.send_to(endpoint_id, &message);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to encode snapshot acknowledgement");
+            }
+        }
+        true
+    }
+
     pub(crate) fn send_to(
         &mut self,
         endpoint_id: &ClientEndpointId,
@@ -393,6 +426,58 @@ mod tests {
 
     fn profile() -> crate::client::endpoint::ProfileId {
         crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap()
+    }
+
+    fn negotiation_with_view_ack() -> EndpointNegotiation {
+        EndpointNegotiation::new(
+            vec!["client_shell.surface.set".into()],
+            vec![crate::protocol::endpoint::CLIENT_VIEW_ACK_CAPABILITY.into()],
+        )
+    }
+
+    #[test]
+    fn applied_snapshots_are_acknowledged_only_to_an_active_endpoint_that_asks() {
+        let acking_sent = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = EndpointRegistry::new(
+            FakeTransport {
+                sent: acking_sent.clone(),
+                error: None,
+            },
+            1,
+            negotiation_with_view_ack(),
+        );
+
+        assert!(registry.acknowledge_applied_snapshot(&ClientEndpointId::Local, "boot", 4));
+        assert_eq!(
+            acking_sent.lock().unwrap().as_slice(),
+            &[crate::protocol::endpoint::snapshot_applied_message("boot", 4).unwrap()]
+        );
+
+        registry.freeze_input();
+        assert!(
+            !registry.acknowledge_applied_snapshot(&ClientEndpointId::Local, "boot", 5),
+            "an acknowledgement waits while the surface cannot take input"
+        );
+        registry.unfreeze_input();
+
+        let ssh_id = ClientEndpointId::Ssh(profile());
+        assert!(registry.acknowledge_applied_snapshot(&ssh_id, "boot", 6));
+        assert_eq!(acking_sent.lock().unwrap().len(), 1);
+
+        let older_sent = Arc::new(Mutex::new(Vec::new()));
+        let mut older = EndpointRegistry::new(
+            FakeTransport {
+                sent: older_sent.clone(),
+                error: None,
+            },
+            1,
+            negotiation(),
+        );
+        assert!(older.acknowledge_applied_snapshot(&ClientEndpointId::Local, "boot", 4));
+        assert!(
+            older_sent.lock().unwrap().is_empty(),
+            "a server without client_view_ack is never sent acknowledgements"
+        );
     }
 
     #[test]

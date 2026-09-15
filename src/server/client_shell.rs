@@ -3,6 +3,88 @@ use ratatui::layout::Rect;
 use crate::app;
 use crate::protocol::{self, FrameData};
 
+/// What one client's snapshot presents as focused: the workspace, tab and pane its input
+/// goes to, and whether that tab is zoomed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ClientShellView {
+    pub(crate) workspace_id: Option<String>,
+    pub(crate) tab_id: Option<String>,
+    pub(crate) pane_id: Option<String>,
+    pub(crate) zoomed: bool,
+}
+
+impl ClientShellView {
+    /// The view a sent snapshot carries.
+    pub(crate) fn of_snapshot(snapshot: &protocol::ClientShellSnapshot) -> Self {
+        Self {
+            workspace_id: snapshot.focused_workspace_id.clone(),
+            tab_id: snapshot.focused_tab_id.clone(),
+            pane_id: snapshot.focused_pane_id.clone(),
+            zoomed: snapshot.focused_tab_id.as_deref().is_some_and(|tab_id| {
+                snapshot
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.tab_id == tab_id && tab.zoomed)
+            }),
+        }
+    }
+}
+
+/// The view [`snapshot`] would present for `location` now, without building the rest of it.
+/// A location that names no tab falls back to server focus.
+pub(super) fn view(
+    app: &app::App,
+    location: Option<&crate::server::clients::ClientShellLocation>,
+) -> ClientShellView {
+    let server_workspace = app.state.active.and_then(|workspace_index| {
+        app.state
+            .workspaces
+            .get(workspace_index)
+            .map(|workspace| (workspace_index, workspace))
+    });
+    let workspace_id = location
+        .and_then(|location| location.focused_workspace_id.clone())
+        .or_else(|| {
+            app.state
+                .active
+                .map(|workspace_index| app.public_workspace_id(workspace_index))
+        });
+    let tab_id = location
+        .and_then(|location| location.focused_tab_id().map(str::to_owned))
+        .or_else(|| {
+            server_workspace.and_then(|(workspace_index, workspace)| {
+                app.public_tab_id(workspace_index, workspace.active_tab)
+            })
+        });
+    let focused_tab = tab_id
+        .as_deref()
+        .and_then(|tab_id| app.parse_tab_id(tab_id))
+        .and_then(|(workspace_index, tab_index)| {
+            let tab = app
+                .state
+                .workspaces
+                .get(workspace_index)?
+                .tabs
+                .get(tab_index)?;
+            Some((workspace_index, tab))
+        });
+    let pane_id = focused_tab
+        .and_then(|(workspace_index, tab)| {
+            app.public_pane_id(workspace_index, tab.layout.focused())
+        })
+        .or_else(|| {
+            server_workspace.and_then(|(workspace_index, workspace)| {
+                app.public_pane_id(workspace_index, workspace.focused_pane_id()?)
+            })
+        });
+    ClientShellView {
+        workspace_id,
+        tab_id,
+        pane_id,
+        zoomed: focused_tab.is_some_and(|(_, tab)| tab.zoomed),
+    }
+}
+
 #[cfg(test)]
 pub(super) fn snapshot(
     app: &app::App,
@@ -34,27 +116,12 @@ pub(super) fn snapshot_with_completions(
             .filter_map(|agent| agent.completion_seq.map(|seq| (agent.pane_id.clone(), seq)))
             .collect(),
     };
-    let focused_workspace_id = location
-        .and_then(|location| location.focused_workspace_id.clone())
-        .or_else(|| snapshot.focused_workspace_id.clone());
-    let focused_tab_id = location
-        .and_then(|location| location.focused_tab_id().map(str::to_owned))
-        .or_else(|| snapshot.focused_tab_id.clone());
-    let focused_pane_id = focused_tab_id
-        .as_deref()
-        .and_then(|tab_id| app.parse_tab_id(tab_id))
-        .and_then(|(workspace_index, tab_index)| {
-            let pane_id = app
-                .state
-                .workspaces
-                .get(workspace_index)?
-                .tabs
-                .get(tab_index)?
-                .layout
-                .focused();
-            app.public_pane_id(workspace_index, pane_id)
-        })
-        .or_else(|| snapshot.focused_pane_id.clone());
+    let ClientShellView {
+        workspace_id: focused_workspace_id,
+        tab_id: focused_tab_id,
+        pane_id: focused_pane_id,
+        zoomed,
+    } = view(app, location);
     let workspaces = snapshot
         .workspaces
         .into_iter()
@@ -187,17 +254,6 @@ pub(super) fn snapshot_with_completions(
         .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
         .collect();
 
-    let zoomed = focused_tab_id
-        .as_deref()
-        .and_then(|tab_id| app.parse_tab_id(tab_id))
-        .and_then(|(workspace_index, tab_index)| {
-            app.state
-                .workspaces
-                .get(workspace_index)?
-                .tabs
-                .get(tab_index)
-        })
-        .is_some_and(|tab| tab.zoomed);
     let tab_bar_right = app
         .state
         .tab_bar_right

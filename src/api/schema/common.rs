@@ -74,9 +74,30 @@ pub struct ClientViewFocusParams {
     /// showed in that workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
+    /// Answer only once the client has applied a snapshot showing the new view, as
+    /// `client.view.wait` does. Needs `client_view_ack`; a server without it ignores
+    /// this field and answers at once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wait: bool,
+    /// Longest wait in milliseconds when `wait` is set. Defaults to 5000, at most 60000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
-/// One connected client and the workspace and tab it shows.
+/// Waits until one connected client, addressed by exactly one of `client_id` or
+/// `client_tag`, has applied a snapshot showing its current view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ClientViewWaitParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_tag: Option<String>,
+    /// Longest wait in milliseconds. Defaults to 5000, at most 60000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+/// One connected client and the workspace, tab and pane it shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ClientInfo {
     pub client_id: u64,
@@ -86,6 +107,30 @@ pub struct ClientInfo {
     pub workspace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
+    /// Focused pane of the tab this client shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    /// Whether the tab this client shows is zoomed.
+    #[serde(default)]
+    pub zoomed: bool,
+    /// Whether this client acknowledges the snapshots it applies. Only such a client
+    /// can be waited on.
+    #[serde(default)]
+    pub snapshot_acks: bool,
+    /// Latest snapshot revision the server sent this client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    /// First sent revision that carries the view (workspace, tab, focused pane and
+    /// zoom) of the latest sent snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_revision: Option<u64>,
+    /// Latest snapshot revision the client acknowledged applying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_revision: Option<u64>,
+    /// Whether the client has applied a snapshot showing its current view, so input
+    /// it sends now goes to `pane_id`.
+    #[serde(default)]
+    pub view_applied: bool,
 }
 
 /// Updates whether the requesting client shell receives and controls pane presentation.

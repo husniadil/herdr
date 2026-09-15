@@ -479,6 +479,17 @@ impl ClientShellState {
         self.endpoint_label(&self.active_endpoint_id)
     }
 
+    /// The latest active snapshot not yet acknowledged to its endpoint.
+    pub(crate) fn unacknowledged_snapshot(&self) -> Option<(&ClientEndpointId, &str, u64)> {
+        self.unacknowledged_snapshot
+            .as_ref()
+            .map(|(endpoint_id, boot_id, revision)| (endpoint_id, boot_id.as_str(), *revision))
+    }
+
+    pub(crate) fn clear_unacknowledged_snapshot(&mut self) {
+        self.unacknowledged_snapshot = None;
+    }
+
     pub(crate) fn endpoint_is_active(&self, endpoint_id: &ClientEndpointId) -> bool {
         &self.active_endpoint_id == endpoint_id
     }
