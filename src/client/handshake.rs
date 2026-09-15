@@ -153,6 +153,7 @@ pub(crate) fn probe_endpoint_negotiation(
         false,
         false,
         false, // This probe uses an SSH bridge, not a shared filesystem.
+        &super::ClientViewRequest::default(),
     )
     .map_err(io::Error::other)?;
     Ok(super::endpoint::EndpointNegotiation::new(
@@ -172,6 +173,7 @@ pub(super) struct HandshakePixelCapabilities {
 /// shells use the stable endpoint generation and negotiate whole codecs without
 /// comparing Herdr build versions. `local_transport` means the endpoint shares the
 /// client's filesystem, not merely that its bridge exposes a local socket.
+#[allow(clippy::too_many_arguments)] // The fork's client view joins upstream's arguments past the limit.
 pub(super) fn do_handshake(
     stream: &mut LocalStream,
     cols: u16,
@@ -184,6 +186,7 @@ pub(super) fn do_handshake(
     mouse_capture: bool,
     surface_active: bool,
     local_transport: bool,
+    view: &super::ClientViewRequest,
 ) -> Result<HandshakeResult, ClientError> {
     stream
         .set_nonblocking(false)
@@ -213,6 +216,8 @@ pub(super) fn do_handshake(
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
             blob_codecs: vec![BLOB_CODEC_V1.into()],
+            workspace_id: view.workspace_id.clone(),
+            client_tag: view.client_tag.clone(),
         };
         ClientMessage::EndpointControl {
             kind: ENDPOINT_HELLO_KIND.into(),

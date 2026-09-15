@@ -36,4 +36,9 @@ pub struct ServerCapabilities {
     /// Supports connection-scoped `server.ssh_agent.register` on the local JSON API.
     #[serde(default)]
     pub ssh_agent_registration: bool,
+    /// Whether this server lists connected clients (`client.list`), moves one
+    /// client's view without moving server focus (`client.view.focus`), and
+    /// honours `workspace_id` and `client_tag` in the endpoint hello.
+    #[serde(default)]
+    pub client_view_focus: bool,
 }
