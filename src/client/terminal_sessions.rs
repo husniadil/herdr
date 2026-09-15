@@ -101,6 +101,7 @@ fn connect_terminal_session_stream(
         false,
         true,
         true,
+        &super::ClientViewRequest::default(),
     ) {
         Ok(handshake) if handshake.encoding == RenderEncoding::TerminalAnsi => {}
         Ok(handshake) => {

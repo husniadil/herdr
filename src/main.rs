@@ -552,6 +552,15 @@ fn main() -> io::Result<()> {
         return remote::run_remote_api_bridge(&args[2..]);
     }
 
+    let (args, client_view) = match client::extract_launch_view_args(&args) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            eprintln!("error: {err}");
+            eprintln!("run 'herdr --help' for usage");
+            std::process::exit(2);
+        }
+    };
+
     // Subcommands and flags (no TUI, no logging needed)
     if args.get(1).map(|s| s.as_str()) == Some("remote-client-bridge") {
         return remote::run_remote_client_bridge(&args[2..]);
@@ -565,7 +574,7 @@ fn main() -> io::Result<()> {
     if args.get(1).map(|s| s.as_str()) == Some("client") {
         let loaded_config = config::Config::load();
         exit_if_nested_disabled(&loaded_config.config);
-        return client::run_client();
+        return client::run_client(client_view);
     }
 
     if args.get(1).map(|s| s.as_str()) == Some("update") {
@@ -602,7 +611,7 @@ fn main() -> io::Result<()> {
         println!("       herdr --session <name> [options]");
         println!("       herdr --machine <label-or-id> <command>");
         println!("       herdr --remote <ssh-target> [--session <name>]");
-        println!("       herdr session attach <name>");
+        println!("       herdr session attach <name> [--workspace <id>] [--client-tag <tag>]");
         println!("       herdr completion zsh");
         println!("       herdr update [--handoff]");
         println!("       herdr channel set <stable|preview>");
@@ -699,6 +708,10 @@ fn main() -> io::Result<()> {
         println!("  --remote-keybindings <local|server>");
         println!("                      Keybindings for --remote app attach (default: local)");
         println!("  --handoff           Opt into live handoff for update or remote attach");
+        println!(
+            "  --workspace <id>    Start this client on a workspace without moving other clients"
+        );
+        println!("  --client-tag <tag>  Label this client for client.list and client.view.focus");
         println!("  --default-config    Print default configuration and exit");
         println!("  --skill             Print the agent skill file and exit");
         println!("  --version, -V       Print version and exit");
@@ -790,7 +803,7 @@ fn main() -> io::Result<()> {
 
     let saved_federation =
         client::endpoint::EndpointCatalog::load().is_ok_and(|catalog| catalog.has_enabled_ssh());
-    if let Err(err) = server::autodetect::auto_detect_launch(saved_federation) {
+    if let Err(err) = server::autodetect::auto_detect_launch(saved_federation, client_view) {
         eprintln!("herdr: {err}");
         std::process::exit(1);
     }

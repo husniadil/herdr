@@ -267,6 +267,20 @@ impl ClientShellState {
             && self.endpoint_has_snapshot(endpoint_id)
     }
 
+    /// Workspace the endpoint's last snapshot showed, kept while it reconnects.
+    pub(crate) fn endpoint_focused_workspace_id(
+        &self,
+        endpoint_id: &ClientEndpointId,
+    ) -> Option<&str> {
+        self.endpoints
+            .iter()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)?
+            .snapshot
+            .as_deref()?
+            .focused_workspace_id
+            .as_deref()
+    }
+
     pub(crate) fn endpoint_boot_id(&self, endpoint_id: &ClientEndpointId) -> Option<&str> {
         self.endpoints
             .iter()

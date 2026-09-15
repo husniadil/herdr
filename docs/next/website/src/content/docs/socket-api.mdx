@@ -98,7 +98,7 @@ Raw socket method names use dot notation:
 | --- | --- |
 | Server | `ping`, `server.stop`, `server.reload_config`, `server.agent_manifests`, `server.reload_agent_manifests` |
 | Notification | `notification.show` |
-| Client | `client.window_title.set`, `client.window_title.clear` |
+| Client | `client.window_title.set`, `client.window_title.clear`, `client.list`, `client.view.focus` |
 | Session | `session.snapshot` |
 | Workspace | `workspace.create`, `workspace.list`, `workspace.get`, `workspace.focus`, `workspace.rename`, `workspace.move`, `workspace.move_block`, `workspace.report_metadata`, `workspace.close` |
 | Worktree | `worktree.list`, `worktree.create`, `worktree.open`, `worktree.remove` |
@@ -338,6 +338,43 @@ Set or clear the foreground client's outer terminal window title:
 `client.window_title.clear` hands the title back to `ui.window_title`. The response is
 `type: "client_window_title"` with `changed` and reason `set`, `cleared`, or
 `no_foreground_client`.
+
+Every attached Herdr client has its own view: the workspace and tab it shows.
+`workspace.focus`, `tab.focus`, and navigation keys inside a client move the server's
+focus, and `workspace.focus` moves every client. `client.list` and
+`client.view.focus` read and move one client's view without touching the server's
+focus or any other client. A server that supports them reports
+`capabilities.client_view_focus: true` from `ping`.
+
+A client can be started on a workspace and labelled for these methods with
+`herdr --workspace <workspace_id> --client-tag <tag>` (or
+`herdr session attach <name> --workspace <workspace_id> --client-tag <tag>`). The
+start workspace applies only to that client; an id that names no workspace falls
+back to the server's focus. A tag is 1 to 128 bytes without control characters,
+and a server rejects the connection with `invalid_client_tag` otherwise. Tags are
+not required to be unique.
+
+List connected clients, in `client_id` order:
+
+```json
+{"id":"req_clients","method":"client.list","params":{}}
+{"id":"req_clients","result":{"type":"client_list","clients":[{"client_id":3,"client_tag":"browser-1","workspace_id":"w1","tab_id":"w1:t1"}]}}
+```
+
+`client_tag` is omitted for an untagged client. Move one client, addressed by exactly
+one of `client_id` or `client_tag`:
+
+```json
+{"id":"req_view","method":"client.view.focus","params":{"client_tag":"browser-1","workspace_id":"w2","tab_id":"w2:t2"}}
+{"id":"req_view","result":{"type":"client_view_focus","client":{"client_id":3,"client_tag":"browser-1","workspace_id":"w2","tab_id":"w2:t2"}}}
+```
+
+`tab_id` is optional and must belong to `workspace_id`; without it the client shows
+the tab it last showed in that workspace. The moved client is repainted and, when a
+window title is configured or set through `client.window_title.set`, sent the title
+for its new view. Errors are `invalid_params` (both or neither address given),
+`client_not_found`, `ambiguous_client` (a tag shared by several clients; address one
+by `client_id`), `workspace_not_found`, and `tab_not_found`.
 
 Worktree methods manage Git checkouts as Herdr workspaces. `worktree.create` creates a checkout and returns the new `workspace`, `tab`, `root_pane`, and `worktree` records. If the requested branch already exists locally, it checks out that branch; otherwise it creates the branch from the requested base or `HEAD`. `worktree.open` opens an existing checkout or returns the already-open workspace. `worktree.remove` runs `git worktree remove` against a linked child workspace and never deletes the branch.
 
@@ -945,7 +982,12 @@ they agree on the core snapshot, screen, input, and blob codecs, and the server 
 the API methods and optional capabilities it supports. Saved SSH federation requires the
 `surface_interest` capability so only the selected machine streams a pane surface and the
 `health_check` capability so a quiet broken connection cannot remain Online indefinitely. A server
-without this lifecycle support stays at Attention until it is explicitly updated. Other missing methods disable
+without this lifecycle support stays at Attention until it is explicitly updated. A server that
+advertises `client_view_focus` in its welcome honours the optional `workspace_id` and
+`client_tag` hello fields; an older server ignores them and shows its own focus. When a
+client launched with `--workspace` or `--client-tag` reconnects to Local on its own, it
+asks for the workspace it was last showing rather than the one it was launched with, so
+a client moved by `client.view.focus` is not snapped back. Other missing methods disable
 only those actions and show a client-local notice; they do not disconnect the UI. Rejected
 or timed-out actions are also reported without ending the connection. Servers
 from before endpoint generation 1 need one final update.
