@@ -72,6 +72,9 @@ pub struct Version {
 impl Version {
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.strip_prefix('v').unwrap_or(s);
+        // Build metadata never affects precedence (SemVer 2.0.0 section 10), so a
+        // fork build such as `0.9.0+agm.1` compares equal to `0.9.0`.
+        let s = s.split_once('+').map_or(s, |(version, _)| version);
         let parts: Vec<&str> = s.split('.').collect();
         if parts.len() != 3 {
             return None;
@@ -2521,6 +2524,13 @@ mod tests {
                 patch: 0
             })
         );
+    }
+
+    #[test]
+    fn parse_version_ignores_build_metadata() {
+        assert_eq!(Version::parse("0.9.0+agm.1"), Version::parse("0.9.0"));
+        assert!(Version::parse("0.9.0+agm.1").is_some());
+        assert_eq!(Version::parse("1.2+meta"), None);
     }
 
     #[test]
