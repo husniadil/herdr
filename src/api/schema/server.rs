@@ -46,4 +46,7 @@ pub struct ServerCapabilities {
     /// `client.view.focus`.
     #[serde(default)]
     pub client_view_ack: bool,
+    /// Whether this server honours `pane_id` in `client.view.focus`.
+    #[serde(default)]
+    pub client_view_pane: bool,
 }

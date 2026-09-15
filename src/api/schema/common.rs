@@ -74,6 +74,12 @@ pub struct ClientViewFocusParams {
     /// showed in that workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
+    /// Pane to focus inside its tab, as a click on it would: the client is moved onto
+    /// that pane's tab and the tab's focused pane becomes this one. The tab's zoom is
+    /// left as it is. Must be in `workspace_id`, and in `tab_id` when that is given.
+    /// Needs `client_view_pane`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
     /// Answer only once the client has applied a snapshot showing the new view, as
     /// `client.view.wait` does. Needs `client_view_ack`; a server without it ignores
     /// this field and answers at once.

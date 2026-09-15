@@ -1319,12 +1319,55 @@ impl HeadlessServer {
             },
             None => None,
         };
+        // A pane names its own tab; one outside the workspace, or outside the tab
+        // asked for, is refused before anything moves.
+        let pane = match params.pane_id.as_deref() {
+            Some(requested) => {
+                let found = self
+                    .app
+                    .parse_pane_id(requested)
+                    .filter(|&(pane_workspace, _)| pane_workspace == workspace_index)
+                    .and_then(|(_, pane_id)| {
+                        let tab_index = self.app.state.workspaces[workspace_index]
+                            .find_tab_index_for_pane(pane_id)?;
+                        Some((tab_index, pane_id))
+                    });
+                match found {
+                    Some((tab_index, pane_id))
+                        if tab_id.is_none()
+                            || tab_id == self.app.public_tab_id(workspace_index, tab_index) =>
+                    {
+                        Some((tab_index, pane_id))
+                    }
+                    _ => {
+                        return error(
+                            id,
+                            (
+                                "pane_not_found",
+                                format!(
+                                    "pane {requested} not found in {}",
+                                    tab_id.as_deref().unwrap_or(&workspace_id)
+                                ),
+                            ),
+                        );
+                    }
+                }
+            }
+            None => None,
+        };
+        let tab_id = match pane {
+            Some((tab_index, _)) => self.app.public_tab_id(workspace_index, tab_index),
+            None => tab_id,
+        };
         let workspace_active_tab = self.app.public_tab_id(
             workspace_index,
             self.app.state.workspaces[workspace_index].active_tab_index(),
         );
 
         let focus_before = self.shell_focus_target(client_id);
+        // A pane focused moves the focus of its tab, which every client on that tab
+        // shows, so their focus is read as well.
+        let all_focus_before = pane.is_some().then(|| self.shell_focus_targets());
         let focused_tabs_before = self.focused_shell_tabs();
         let Some(location) = self
             .clients
@@ -1348,14 +1391,46 @@ impl HeadlessServer {
             Some(tab_id) => location.focus_tab(workspace_id, tab_id),
             None => location.focus_workspace(workspace_id),
         }
-        let focus_after = self.shell_focus_target(client_id);
-        let focused_tabs_after = self.focused_shell_tabs();
-        self.send_shell_navigation_focus_events(
-            focus_before.as_ref(),
-            focus_after.as_ref(),
-            &focused_tabs_before,
-            &focused_tabs_after,
-        );
+        if let Some((tab_index, pane_id)) = pane {
+            if let Some(tab) = self.app.state.workspaces[workspace_index]
+                .tabs
+                .get_mut(tab_index)
+            {
+                tab.layout.focus_pane(pane_id);
+            }
+            self.app.state.mark_session_dirty();
+        }
+        match all_focus_before {
+            Some(all_before) => {
+                let (lost, gained) =
+                    self.shell_location_focus_transitions(all_before, &focused_tabs_before);
+                self.send_shell_focus_transitions(&lost, &gained);
+                let pane_tab = self.shell_tab_id_for_client(client_id);
+                let others: Vec<u64> = self
+                    .clients
+                    .keys()
+                    .copied()
+                    .filter(|&other| {
+                        other != client_id && self.shell_tab_id_for_client(other) == pane_tab
+                    })
+                    .collect();
+                for other in others {
+                    if let Some(client) = self.clients.get_mut(&other) {
+                        client.request_repaint();
+                    }
+                }
+            }
+            None => {
+                let focus_after = self.shell_focus_target(client_id);
+                let focused_tabs_after = self.focused_shell_tabs();
+                self.send_shell_navigation_focus_events(
+                    focus_before.as_ref(),
+                    focus_after.as_ref(),
+                    &focused_tabs_before,
+                    &focused_tabs_after,
+                );
+            }
+        }
         let _ = self.claim_shell_tab_geometry(client_id, false)
             || self.resize_shell_tab_if_controller(client_id, false);
         if let Some(client) = self.clients.get_mut(&client_id) {
