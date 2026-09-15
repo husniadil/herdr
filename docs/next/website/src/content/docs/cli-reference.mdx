@@ -24,6 +24,8 @@ herdr --version               # print version
 Optional launch and update settings:
 
 - Add `--session <name>` to use a named session instead of the default.
+- Add `--workspace <workspace_id>` to start this client on a workspace without moving the server's focus or other clients. An unknown id falls back to the server's focus.
+- Add `--client-tag <tag>` to label this client for the `client.list` and `client.view.focus` socket methods.
 - Add `--remote-keybindings server` to remote attach to use server keybindings instead of local ones.
 - Experimental live handoff requires explicit `--handoff` on `herdr --remote` or `herdr update`. It is not the normal setup or connection path; see [Updates](/docs/install/#update).
 
@@ -143,7 +145,7 @@ herdr notification show <title> [--body TEXT] [--position top-left|top-right|bot
 
 ```bash
 herdr session list [--json]
-herdr session attach <name>
+herdr session attach <name> [--workspace <workspace_id>] [--client-tag <tag>]
 herdr session stop <name> [--json]
 herdr session delete <name> [--json]
 ```

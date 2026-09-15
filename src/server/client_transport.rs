@@ -419,6 +419,10 @@ pub(crate) enum ServerEvent {
         surface_reuse: bool,
         surface_delta: bool,
         surface_scroll: bool,
+        /// Workspace the hello asked this connection to show first.
+        workspace_id: Option<String>,
+        /// Caller-chosen label from the hello.
+        client_tag: Option<String>,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -767,6 +771,13 @@ pub(crate) fn handle_client_handshake(
                     hello.cell_height_px,
                 )
                 .map(|reason| ("invalid_surface", reason.to_owned()))
+                .or_else(|| {
+                    hello.client_tag.as_deref().and_then(|tag| {
+                        crate::protocol::endpoint::validate_client_tag(tag)
+                            .err()
+                            .map(|reason| ("invalid_client_tag", reason))
+                    })
+                })
             };
             if let Some((code, reason)) = incompatibility {
                 write_endpoint_rejection(&mut stream, code, reason);
@@ -787,6 +798,8 @@ pub(crate) fn handle_client_handshake(
                     hello.surface_reuse,
                     hello.surface_delta,
                     hello.surface_scroll,
+                    hello.workspace_id,
+                    hello.client_tag,
                 )),
             )
         }
@@ -884,6 +897,8 @@ pub(crate) fn handle_client_handshake(
         surface_reuse,
         surface_delta,
         surface_scroll,
+        workspace_id,
+        client_tag,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -900,6 +915,8 @@ pub(crate) fn handle_client_handshake(
             surface_reuse,
             surface_delta,
             surface_scroll,
+            workspace_id,
+            client_tag,
             writer,
         }
     } else {
@@ -1481,6 +1498,8 @@ mod tests {
             surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
             input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
             blob_codecs: vec![crate::protocol::endpoint::BLOB_CODEC_V1.into()],
+            workspace_id: None,
+            client_tag: None,
         };
         ClientMessage::EndpointControl {
             kind: ENDPOINT_HELLO_KIND.into(),
@@ -1995,11 +2014,15 @@ mod tests {
                 surface_reuse,
                 surface_delta,
                 surface_scroll,
+                workspace_id,
+                client_tag,
                 writer,
             } => {
                 assert!(!surface_reuse);
                 assert!(!surface_delta);
                 assert!(!surface_scroll);
+                assert_eq!(workspace_id, None);
+                assert_eq!(client_tag, None);
                 assert_eq!(client_id, 43);
                 assert_eq!((surface_cols, surface_rows), (80, 29));
                 assert_eq!((cell_width_px, cell_height_px), (8, 16));
@@ -2041,6 +2064,104 @@ mod tests {
         assert!(welcome
             .error
             .is_some_and(|error| error.message.contains("non-empty pane surface")));
+        handle
+            .join()
+            .expect("handshake thread join")
+            .expect("handshake thread result");
+        assert!(server_event_rx.try_recv().is_err());
+    }
+
+    fn endpoint_hello_with_view(
+        workspace_id: Option<&str>,
+        client_tag: Option<&str>,
+    ) -> ClientMessage {
+        let ClientMessage::EndpointControl { kind, data } = endpoint_hello(80, 29) else {
+            unreachable!("endpoint hello is an endpoint control");
+        };
+        let mut hello: serde_json::Value = serde_json::from_str(&data).unwrap();
+        if let Some(workspace_id) = workspace_id {
+            hello["workspace_id"] = serde_json::json!(workspace_id);
+        }
+        if let Some(client_tag) = client_tag {
+            hello["client_tag"] = serde_json::json!(client_tag);
+        }
+        ClientMessage::EndpointControl {
+            kind,
+            data: hello.to_string(),
+        }
+    }
+
+    #[test]
+    fn client_shell_handshake_carries_start_workspace_and_client_tag() {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("client-shell-view");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let handshake_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            handle_client_handshake(server_stream, 44, &server_event_tx, &handshake_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &endpoint_hello_with_view(Some("w_2"), Some("browser-1")),
+        )
+        .expect("write shell hello");
+
+        let welcome = endpoint_welcome(
+            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read welcome"),
+        );
+        assert!(welcome.error.is_none());
+        assert!(welcome.capabilities.iter().any(
+            |capability| capability == crate::protocol::endpoint::CLIENT_VIEW_FOCUS_CAPABILITY
+        ));
+        match server_event_rx
+            .blocking_recv()
+            .expect("client shell connected event")
+        {
+            ServerEvent::ClientShellConnected {
+                workspace_id,
+                client_tag,
+                writer,
+                ..
+            } => {
+                assert_eq!(workspace_id.as_deref(), Some("w_2"));
+                assert_eq!(client_tag.as_deref(), Some("browser-1"));
+                drop(writer);
+            }
+            other => panic!("expected ClientShellConnected, got {other:?}"),
+        }
+
+        drop(client_stream);
+        should_quit.store(true, Ordering::Release);
+        handle
+            .join()
+            .expect("handshake thread join")
+            .expect("handshake thread result");
+    }
+
+    #[test]
+    fn client_shell_handshake_rejects_an_invalid_client_tag() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-shell-invalid-tag");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let handshake_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            handle_client_handshake(server_stream, 45, &server_event_tx, &handshake_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &endpoint_hello_with_view(None, Some("")),
+        )
+        .expect("write shell hello");
+
+        let welcome = endpoint_welcome(
+            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read welcome"),
+        );
+        assert!(welcome
+            .error
+            .is_some_and(|error| error.code == "invalid_client_tag"));
         handle
             .join()
             .expect("handshake thread join")

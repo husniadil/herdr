@@ -56,8 +56,8 @@ use crate::server::client_shell::{
 };
 use crate::server::client_transport::ServerEvent;
 use crate::server::clients::{
-    latest_shell_client, render_targets, terminal_stream_client_ids, ClientConnection,
-    ClientConnectionMode, ClientShellInputTarget, DeferredRender,
+    has_untagged_shell_client, latest_shell_client, render_targets, terminal_stream_client_ids,
+    ClientConnection, ClientConnectionMode, ClientShellInputTarget, DeferredRender,
 };
 use crate::server::keybindings::{app_keybindings, apply_keybindings};
 use crate::server::notifications::{
@@ -522,7 +522,7 @@ impl HeadlessServer {
                 needs_graphics_render = false;
             }
 
-            if latest_shell_client(&self.clients).is_some() && self.app.ensure_default_workspace() {
+            if has_untagged_shell_client(&self.clients) && self.app.ensure_default_workspace() {
                 needs_render = true;
                 needs_full_render = true;
                 needs_graphics_render = false;
@@ -1490,6 +1490,28 @@ impl HeadlessServer {
         self.send_window_title(title);
     }
 
+    /// Sends one client the title for its own view after that view moved. The
+    /// foreground client goes through the cached path; any other client is told
+    /// directly, since nothing else sends it a title.
+    fn sync_client_window_title(&mut self, client_id: u64) {
+        if self.foreground_client_id == Some(client_id) {
+            self.sync_window_title();
+            return;
+        }
+        let title = match &self.api_window_title {
+            Some(title) => Some(title.clone()),
+            None if self.app.window_title_configured() => self
+                .shell_target_for_client(client_id)
+                .and_then(|target| {
+                    self.app
+                        .window_title_for(target.workspace_index, target.tab_index)
+                })
+                .and_then(|title| crate::config::sanitize_window_title_text(&title)),
+            None => return,
+        };
+        self.send_to_client(client_id, ServerMessage::WindowTitle { title });
+    }
+
     /// Sends a window title and remembers it only when a foreground client took
     /// it, so the next client to attach is written to rather than skipped.
     fn send_window_title(&mut self, title: Option<String>) -> bool {
@@ -1910,6 +1932,8 @@ impl HeadlessServer {
                 surface_reuse,
                 surface_delta,
                 surface_scroll,
+                workspace_id,
+                client_tag,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -1935,7 +1959,9 @@ impl HeadlessServer {
                     render_encoding = ?protocol::RenderEncoding::SemanticFrame,
                     "client connected"
                 );
-                self.app.ensure_default_workspace();
+                if client_tag.is_none() {
+                    self.app.ensure_default_workspace();
+                }
                 let first_app_client = self.app_client_count() == 0;
                 let last_activity = self.allocate_activity_stamp();
                 let observed = crate::kitty_graphics::HostCellSize {
@@ -1961,6 +1987,7 @@ impl HeadlessServer {
                     .render_state
                     .enable_surface_scroll(surface_scroll);
                 connection.shell_projection_revision = 1;
+                connection.client_tag = client_tag;
                 let config_diagnostic = if endpoint_keybindings {
                     self.server_config_diagnostic.as_deref()
                 } else {
@@ -1973,7 +2000,7 @@ impl HeadlessServer {
                     config_diagnostic,
                     None,
                 );
-                let location =
+                let mut location =
                     crate::server::clients::ClientShellLocation::from_snapshot(&seed_snapshot);
                 let agent_view = self.app.state.agent_view_override.clone();
                 let projection_message = match agent_view.as_ref() {
@@ -1989,6 +2016,27 @@ impl HeadlessServer {
                         }
                     },
                     None => None,
+                };
+                // A requested start workspace seeds only this connection's view. An id
+                // that names no workspace falls back to server focus, as a hello
+                // without one does.
+                let start_workspace = workspace_id
+                    .as_deref()
+                    .and_then(|workspace_id| self.app.parse_workspace_id(workspace_id))
+                    .filter(|&index| index < self.app.state.workspaces.len());
+                let seed_snapshot = match start_workspace {
+                    Some(workspace_index) => {
+                        location.focus_workspace(self.app.public_workspace_id(workspace_index));
+                        client_shell_snapshot(
+                            &self.app,
+                            &self.client_shell_boot_id,
+                            connection.shell_projection_revision,
+                            config_diagnostic,
+                            Some(&location),
+                        )
+                        .0
+                    }
+                    None => seed_snapshot,
                 };
                 let snapshot_message =
                     match crate::protocol::endpoint::snapshot_message(&seed_snapshot) {
@@ -2974,6 +3022,17 @@ impl HeadlessServer {
                 let _ = msg.respond_to.send(response);
                 return true;
             }
+            api::schema::Method::ClientList(_) => {
+                let response = self.handle_client_list_api(msg.request.id.clone());
+                let _ = msg.respond_to.send(response);
+                return false;
+            }
+            api::schema::Method::ClientViewFocus(params) => {
+                let (response, changed) =
+                    self.handle_client_view_focus_api(msg.request.id.clone(), params.clone());
+                let _ = msg.respond_to.send(response);
+                return changed;
+            }
             _ => {}
         }
 
@@ -3262,7 +3321,7 @@ impl HeadlessServer {
             }
         }
 
-        if !skip_default_workspace && latest_shell_client(&self.clients).is_some() {
+        if !skip_default_workspace && has_untagged_shell_client(&self.clients) {
             changed |= self.app.ensure_default_workspace();
         }
 

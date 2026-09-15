@@ -173,6 +173,8 @@ pub(crate) struct ClientConnection {
     shell_held_inputs: HashMap<ClientShellPressId, ClientShellHeldInput>,
     /// Temporary files staged from this client's local clipboard image pastes.
     pub(crate) staged_clipboard_files: Vec<PathBuf>,
+    /// Caller-chosen label from the endpoint hello that addresses this connection.
+    pub(crate) client_tag: Option<String>,
     /// Connection-local workspace and tab projection for a client-owned shell.
     pub(crate) shell_location: Option<ClientShellLocation>,
     /// Last coherent shell replacement sent to this client.
@@ -245,6 +247,7 @@ impl ClientConnection {
             host_keyboard_protocol_active: None,
             shell_held_inputs: HashMap::new(),
             staged_clipboard_files: Vec::new(),
+            client_tag: None,
             shell_location: None,
             shell_snapshot: None,
             shell_agent_completions: None,
@@ -479,6 +482,15 @@ pub(crate) fn latest_shell_client(clients: &HashMap<u64, ClientConnection>) -> O
         .filter(|(_, client)| client.is_active_shell_client())
         .max_by_key(|(_, client)| client.last_activity)
         .map(|(&client_id, _)| client_id)
+}
+
+/// Whether an active shell client without a tag is attached. Only such a client is
+/// given a workspace when the server has none. A tagged client's view belongs to the
+/// caller that tagged it, which ends the client once what it showed is gone.
+pub(crate) fn has_untagged_shell_client(clients: &HashMap<u64, ClientConnection>) -> bool {
+    clients
+        .values()
+        .any(|client| client.is_active_shell_client() && client.client_tag.is_none())
 }
 
 pub(crate) fn terminal_stream_client_ids(

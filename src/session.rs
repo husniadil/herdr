@@ -43,13 +43,18 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
         ) {
             return Ok(args.to_vec());
         }
-        let Some(name) = args.get(3) else {
-            return Err("usage: herdr session attach <name>".to_string());
+        const USAGE: &str =
+            "usage: herdr session attach <name> [--workspace <id>] [--client-tag <tag>]";
+        let Some(name) = args.get(3).filter(|name| !name.starts_with('-')) else {
+            return Err(USAGE.to_string());
         };
-        if args.len() != 4 {
-            return Err("usage: herdr session attach <name>".to_string());
+        // The client launch options after the name attach like `herdr [options]`
+        // does. Any other option was passed on, and a second `--session` ignored.
+        if !only_client_view_options(&args[4..]) {
+            return Err(USAGE.to_string());
         }
         apply_explicit_name(name)?;
+        cleaned.extend_from_slice(&args[4..]);
         return Ok(cleaned);
     }
 
@@ -93,6 +98,24 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
     }
 
     Ok(cleaned)
+}
+
+fn only_client_view_options(args: &[String]) -> bool {
+    use crate::client::view_request::{CLIENT_TAG_FLAG, WORKSPACE_FLAG};
+    let mut options = args.iter();
+    while let Some(option) = options.next() {
+        let flag = option
+            .split_once('=')
+            .map_or(option.as_str(), |(flag, _)| flag);
+        if flag != WORKSPACE_FLAG && flag != CLIENT_TAG_FLAG {
+            return false;
+        }
+        // The space form's value is checked where the options are read.
+        if !option.contains('=') {
+            options.next();
+        }
+    }
+    true
 }
 
 pub fn active_name() -> Option<String> {
@@ -828,6 +851,76 @@ mod tests {
         std::env::remove_var(SESSION_ENV_VAR);
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
         clear_explicit_session_for_test();
+    }
+
+    #[test]
+    fn configure_from_args_keeps_launch_options_after_session_attach() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var(SESSION_ENV_VAR);
+        clear_explicit_session_for_test();
+        let args = ["herdr", "session", "attach", "work", "--workspace", "w_2"]
+            .map(String::from)
+            .to_vec();
+
+        let cleaned = configure_from_args(&args).unwrap();
+
+        assert_eq!(cleaned, vec!["herdr", "--workspace", "w_2"]);
+        assert_eq!(std::env::var(SESSION_ENV_VAR).as_deref(), Ok("work"));
+        let stray = ["herdr", "session", "attach", "work", "extra"]
+            .map(String::from)
+            .to_vec();
+        assert!(configure_from_args(&stray).is_err());
+        std::env::remove_var(SESSION_ENV_VAR);
+        clear_explicit_session_for_test();
+    }
+
+    #[test]
+    fn session_attach_takes_only_the_client_launch_options_after_its_name() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var(SESSION_ENV_VAR);
+        clear_explicit_session_for_test();
+        let parse = |values: &[&str]| {
+            let args = values
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>();
+            let result = configure_from_args(&args);
+            std::env::remove_var(SESSION_ENV_VAR);
+            clear_explicit_session_for_test();
+            result
+        };
+
+        assert_eq!(
+            parse(&[
+                "herdr",
+                "session",
+                "attach",
+                "work",
+                "--workspace=w_2",
+                "--client-tag",
+                "browser-1",
+            ]),
+            Ok(vec![
+                "herdr".to_owned(),
+                "--workspace=w_2".to_owned(),
+                "--client-tag".to_owned(),
+                "browser-1".to_owned(),
+            ])
+        );
+        // A second session, a remote or any other option after the name was
+        // passed on and either ignored or acted on beside the attach.
+        for option in [
+            &["--session", "other"][..],
+            &["--session=other"][..],
+            &["--remote", "host"][..],
+            &["--default-config"][..],
+        ] {
+            let mut values = vec!["herdr", "session", "attach", "work"];
+            values.extend_from_slice(option);
+            assert!(parse(&values).is_err(), "{values:?}");
+        }
+        // An option where the name belongs is not a session name.
+        assert!(parse(&["herdr", "session", "attach", "--workspace"]).is_err());
     }
 
     #[test]
