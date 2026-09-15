@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "client_view_focus.rs"]
+mod client_view_focus_tests;
 #[path = "pane_graphics.rs"]
 mod pane_graphics_tests;
 #[path = "pane_move.rs"]
@@ -693,6 +695,8 @@ async fn client_shell_attach_seeds_workspace() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            workspace_id: None,
+            client_tag: None,
             client_id: 6,
             surface_cols: 80,
             surface_rows: 23,
@@ -725,6 +729,8 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            workspace_id: None,
+            client_tag: None,
             client_id,
             surface_cols: 80,
             surface_rows: 23,
@@ -843,6 +849,8 @@ async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            workspace_id: None,
+            client_tag: None,
             client_id: 77,
             surface_cols: 80,
             surface_rows: 23,
@@ -953,6 +961,8 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            workspace_id: None,
+            client_tag: None,
             client_id: 7,
             surface_cols: 80,
             surface_rows: 23,
@@ -1122,6 +1132,8 @@ fn connect_test_shell(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            workspace_id: None,
+            client_tag: None,
             client_id,
             surface_cols,
             surface_rows,
@@ -1585,6 +1597,8 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            workspace_id: None,
+            client_tag: None,
             client_id: 13,
             surface_cols: 80,
             surface_rows: 23,
@@ -1611,6 +1625,8 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            workspace_id: None,
+            client_tag: None,
             client_id: 14,
             surface_cols: 80,
             surface_rows: 23,
@@ -2515,6 +2531,8 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            workspace_id: None,
+            client_tag: None,
             client_id: 9,
             surface_cols: 80,
             surface_rows: 23,
@@ -2767,6 +2785,8 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            workspace_id: None,
+            client_tag: None,
             client_id: 12,
             surface_cols: 80,
             surface_rows: 23,

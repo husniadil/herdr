@@ -962,4 +962,186 @@ impl HeadlessServer {
             };
         changed | navigation_changed | geometry_changed
     }
+
+    /// Shell connections that can receive a view, in client id order.
+    fn view_client_ids(&self) -> Vec<u64> {
+        let mut client_ids = self
+            .clients
+            .iter()
+            .filter(|(_, client)| client.is_shell_client() && client.writer.is_some())
+            .map(|(&client_id, _)| client_id)
+            .collect::<Vec<_>>();
+        client_ids.sort_unstable();
+        client_ids
+    }
+
+    fn client_info(&self, client_id: u64) -> Option<api::schema::ClientInfo> {
+        let client = self.clients.get(&client_id)?;
+        let target = self.shell_target_for_client(client_id);
+        Some(api::schema::ClientInfo {
+            client_id,
+            client_tag: client.client_tag.clone(),
+            workspace_id: target.map(|target| self.app.public_workspace_id(target.workspace_index)),
+            tab_id: target.and_then(|target| self.tab_id_for_target(target)),
+        })
+    }
+
+    fn resolve_view_client(
+        &self,
+        client_id: Option<u64>,
+        client_tag: Option<&str>,
+    ) -> Result<u64, (&'static str, String)> {
+        let candidates = self.view_client_ids();
+        match (client_id, client_tag) {
+            (Some(client_id), None) => candidates
+                .contains(&client_id)
+                .then_some(client_id)
+                .ok_or_else(|| ("client_not_found", format!("client {client_id} not found"))),
+            (None, Some(tag)) => {
+                let matches = candidates
+                    .into_iter()
+                    .filter(|client_id| self.clients[client_id].client_tag.as_deref() == Some(tag))
+                    .collect::<Vec<_>>();
+                match matches.as_slice() {
+                    [] => Err(("client_not_found", format!("no client is tagged {tag:?}"))),
+                    [client_id] => Ok(*client_id),
+                    _ => Err((
+                        "ambiguous_client",
+                        format!(
+                            "client tag {tag:?} matches clients {}; address one by client_id",
+                            matches
+                                .iter()
+                                .map(u64::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    )),
+                }
+            }
+            _ => Err((
+                "invalid_params",
+                "pass exactly one of client_id or client_tag".into(),
+            )),
+        }
+    }
+
+    pub(super) fn handle_client_list_api(&self, id: String) -> String {
+        let clients = self
+            .view_client_ids()
+            .into_iter()
+            .filter_map(|client_id| self.client_info(client_id))
+            .collect();
+        serde_json::to_string(&api::schema::SuccessResponse {
+            id,
+            result: api::schema::ResponseResult::ClientList { clients },
+        })
+        .unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Moves one client's view. Unlike `workspace.focus` and client key navigation,
+    /// this leaves `AppState.active` and every other client where they are.
+    pub(super) fn handle_client_view_focus_api(
+        &mut self,
+        id: String,
+        params: api::schema::ClientViewFocusParams,
+    ) -> (String, bool) {
+        let error = |id: String, (code, message): (&str, String)| {
+            (
+                crate::server::client_commands::error_response(id, code, message),
+                false,
+            )
+        };
+        let client_id =
+            match self.resolve_view_client(params.client_id, params.client_tag.as_deref()) {
+                Ok(client_id) => client_id,
+                Err(failure) => return error(id, failure),
+            };
+        let Some(workspace_index) = self
+            .app
+            .parse_workspace_id(&params.workspace_id)
+            .filter(|&index| index < self.app.state.workspaces.len())
+        else {
+            return error(
+                id,
+                (
+                    "workspace_not_found",
+                    format!("workspace {} not found", params.workspace_id),
+                ),
+            );
+        };
+        let workspace_id = self.app.public_workspace_id(workspace_index);
+        let tab_id = match params.tab_id.as_deref() {
+            Some(requested) => match self.app.parse_tab_id(requested) {
+                Some((tab_workspace, tab_index)) if tab_workspace == workspace_index => {
+                    self.app.public_tab_id(tab_workspace, tab_index)
+                }
+                _ => {
+                    return error(
+                        id,
+                        (
+                            "tab_not_found",
+                            format!("tab {requested} not found in workspace {workspace_id}"),
+                        ),
+                    );
+                }
+            },
+            None => None,
+        };
+        let workspace_active_tab = self.app.public_tab_id(
+            workspace_index,
+            self.app.state.workspaces[workspace_index].active_tab_index(),
+        );
+
+        let focus_before = self.shell_focus_target(client_id);
+        let focused_tabs_before = self.focused_shell_tabs();
+        let Some(location) = self
+            .clients
+            .get_mut(&client_id)
+            .and_then(|client| client.shell_location.as_mut())
+        else {
+            return error(
+                id,
+                (
+                    "client_not_found",
+                    format!("client {client_id} has no view"),
+                ),
+            );
+        };
+        match tab_id.or_else(|| {
+            // A workspace created since this client last reconciled has no remembered tab.
+            (!location.active_tab_ids.contains_key(&workspace_id))
+                .then_some(workspace_active_tab)
+                .flatten()
+        }) {
+            Some(tab_id) => location.focus_tab(workspace_id, tab_id),
+            None => location.focus_workspace(workspace_id),
+        }
+        let focus_after = self.shell_focus_target(client_id);
+        let focused_tabs_after = self.focused_shell_tabs();
+        self.send_shell_navigation_focus_events(
+            focus_before.as_ref(),
+            focus_after.as_ref(),
+            &focused_tabs_before,
+            &focused_tabs_after,
+        );
+        let _ = self.claim_shell_tab_geometry(client_id, false)
+            || self.resize_shell_tab_if_controller(client_id, false);
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.request_repaint();
+        }
+        self.sync_client_window_title(client_id);
+
+        let Some(client) = self.client_info(client_id) else {
+            return error(
+                id,
+                ("client_not_found", format!("client {client_id} not found")),
+            );
+        };
+        let response = serde_json::to_string(&api::schema::SuccessResponse {
+            id,
+            result: api::schema::ResponseResult::ClientViewFocus { client },
+        })
+        .unwrap_or_else(|_| "{}".to_string());
+        (response, true)
+    }
 }

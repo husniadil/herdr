@@ -61,6 +61,33 @@ pub struct ClientWindowTitleSetParams {
     pub title: String,
 }
 
+/// Moves the view of one connected client, addressed by exactly one of
+/// `client_id` or `client_tag`. Server focus and other clients stay where they are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ClientViewFocusParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_tag: Option<String>,
+    pub workspace_id: String,
+    /// Tab to show inside `workspace_id`. Omitted keeps the tab this client last
+    /// showed in that workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+}
+
+/// One connected client and the workspace and tab it shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ClientInfo {
+    pub client_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+}
+
 /// Updates whether the requesting client shell receives and controls pane presentation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ClientShellSurfaceSetParams {

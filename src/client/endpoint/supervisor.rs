@@ -43,7 +43,8 @@ pub(crate) enum EndpointSupervisorEvent {
 
 #[derive(Clone)]
 enum ConnectTarget {
-    Local(PathBuf),
+    /// The Local socket, with the view this client process was launched with.
+    Local(PathBuf, crate::client::ClientViewRequest),
     Ssh(super::SavedSshEndpoint),
 }
 
@@ -94,8 +95,14 @@ impl EndpointSupervisors {
         }
     }
 
-    pub(crate) fn add_local(&mut self, path: PathBuf, generation: Option<u64>, now: Instant) {
-        let mut state = ReconnectState::new(ConnectTarget::Local(path), now);
+    pub(crate) fn add_local(
+        &mut self,
+        path: PathBuf,
+        generation: Option<u64>,
+        launch_view: crate::client::ClientViewRequest,
+        now: Instant,
+    ) {
+        let mut state = ReconnectState::new(ConnectTarget::Local(path, launch_view), now);
         state.generation = generation;
         if generation.is_some() {
             state.next_attempt = None;
@@ -134,10 +141,14 @@ impl EndpointSupervisors {
         retired
     }
 
+    /// Starts every due connection attempt. `local_workspace_id` is the workspace
+    /// the Local view last showed: a Local reconnect asks for it rather than the
+    /// launch workspace, so a client that moved is not snapped back.
     pub(crate) fn spawn_due(
         &mut self,
         now: Instant,
         options: EndpointConnectOptions,
+        local_workspace_id: Option<&str>,
         event_tx: &tokio::sync::mpsc::Sender<EndpointSupervisorEvent>,
     ) {
         for (endpoint_id, state) in &mut self.endpoints {
@@ -150,7 +161,7 @@ impl EndpointSupervisors {
             state.generation = Some(generation);
             self.next_generation = self.next_generation.saturating_add(1);
             let endpoint_id = endpoint_id.clone();
-            let target = state.target.clone();
+            let target = attempt_target(&state.target, local_workspace_id);
             let event_tx = event_tx.clone();
             let shutdown = self.shutdown.clone();
             tokio::spawn(async move {
@@ -256,6 +267,20 @@ impl Drop for EndpointSupervisors {
     }
 }
 
+/// The target one connection attempt uses. A Local client launched with
+/// `--workspace` or `--client-tag` keeps its tag and asks for the workspace its
+/// view last showed, falling back to the launch workspace before any snapshot
+/// arrived. A plain launch sends neither, exactly as before these options existed.
+fn attempt_target(target: &ConnectTarget, local_workspace_id: Option<&str>) -> ConnectTarget {
+    let mut target = target.clone();
+    if let (ConnectTarget::Local(_, view), Some(workspace_id)) = (&mut target, local_workspace_id) {
+        if view.workspace_id.is_some() || view.client_tag.is_some() {
+            view.workspace_id = Some(workspace_id.to_owned());
+        }
+    }
+    target
+}
+
 fn connect_once(
     target: &ConnectTarget,
     options: EndpointConnectOptions,
@@ -263,7 +288,7 @@ fn connect_once(
     generation: u64,
 ) -> Result<EndpointSupervisorEvent, std::io::Error> {
     let (mut stream, lifetime): (_, Box<dyn Send>) = match target {
-        ConnectTarget::Local(path) => {
+        ConnectTarget::Local(path, _) => {
             let stream = crate::ipc::connect_local_stream(path).map_err(|error| {
                 // An absent Local socket is transient, unlike a missing SSH install.
                 if error.kind() == std::io::ErrorKind::NotFound {
@@ -286,6 +311,8 @@ fn connect_once(
             (connected.stream, Box::new(connected.bridge))
         }
     };
+    // Workspace ids and tags belong to one server, so an SSH machine gets neither.
+    let default_view = crate::client::ClientViewRequest::default();
     let handshake = super::super::do_handshake(
         &mut stream,
         options.cols,
@@ -297,6 +324,10 @@ fn connect_once(
         options.endpoint_keybindings,
         options.mouse_capture,
         false,
+        match target {
+            ConnectTarget::Local(_, view) => view,
+            ConnectTarget::Ssh(_) => &default_view,
+        },
     )
     .map_err(handshake_error)?;
     if handshake.encoding != RenderEncoding::SemanticFrame {
@@ -382,7 +413,12 @@ mod tests {
         let mut profile = profile();
         let id = ClientEndpointId::Ssh(profile.id.clone());
         let mut supervisors = EndpointSupervisors::new(&[profile.clone()], now);
-        supervisors.add_local(PathBuf::from("local"), Some(1), now);
+        supervisors.add_local(
+            PathBuf::from("local"),
+            Some(1),
+            crate::client::ClientViewRequest::default(),
+            now,
+        );
         let state = supervisors.endpoints.get_mut(&id).unwrap();
         state.generation = Some(7);
         state.attempts = 3;
@@ -497,7 +533,12 @@ mod tests {
     fn healthy_local_only_retries_after_its_connection_fails() {
         let now = Instant::now();
         let mut supervisors = EndpointSupervisors::new(&[profile()], now);
-        supervisors.add_local(PathBuf::from("local.sock"), Some(1), now);
+        supervisors.add_local(
+            PathBuf::from("local.sock"),
+            Some(1),
+            crate::client::ClientViewRequest::default(),
+            now,
+        );
         assert!(supervisors.endpoints[&ClientEndpointId::Local]
             .next_attempt
             .is_none());
@@ -536,5 +577,33 @@ mod tests {
         );
         assert!(supervisors.record_status(&endpoint_id, 4, ClientEndpointStatus::Attention, now));
         assert!(supervisors.endpoints[&endpoint_id].next_attempt.is_none());
+    }
+
+    #[test]
+    fn local_attempts_resume_the_last_shown_workspace_and_keep_the_tag() {
+        let launch = crate::client::ClientViewRequest {
+            workspace_id: Some("w_1".into()),
+            client_tag: Some("browser-1".into()),
+        };
+        let local = ConnectTarget::Local(PathBuf::from("local.sock"), launch.clone());
+
+        let ConnectTarget::Local(_, before_snapshot) = attempt_target(&local, None) else {
+            panic!("expected a Local target");
+        };
+        assert_eq!(before_snapshot, launch);
+
+        let ConnectTarget::Local(_, after_moving) = attempt_target(&local, Some("w_3")) else {
+            panic!("expected a Local target");
+        };
+        assert_eq!(after_moving.workspace_id.as_deref(), Some("w_3"));
+        assert_eq!(after_moving.client_tag.as_deref(), Some("browser-1"));
+        let plain = ConnectTarget::Local(
+            PathBuf::from("local.sock"),
+            crate::client::ClientViewRequest::default(),
+        );
+        let ConnectTarget::Local(_, plain_view) = attempt_target(&plain, Some("w_3")) else {
+            panic!("expected a Local target");
+        };
+        assert_eq!(plain_view, crate::client::ClientViewRequest::default());
     }
 }
