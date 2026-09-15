@@ -2866,6 +2866,7 @@ mod tests {
                 health_check: true,
                 client_view_focus: false,
                 client_view_ack: false,
+                client_view_pane: false,
             }),
         };
         let missing_baseline = crate::api::RuntimeStatus {
@@ -2942,6 +2943,7 @@ mod tests {
                     health_check: true,
                     client_view_focus: false,
                     client_view_ack: false,
+                    client_view_pane: false,
                 }),
             },
         };
@@ -3202,6 +3204,7 @@ mod tests {
                     health_check: true,
                     client_view_focus: false,
                     client_view_ack: false,
+                    client_view_pane: false,
                 }),
             },
         };

@@ -80,6 +80,7 @@ fn focus_params(
         client_tag: client_tag.map(str::to_owned),
         workspace_id: workspace_id.to_owned(),
         tab_id: tab_id.map(str::to_owned),
+        pane_id: None,
         wait: false,
         timeout_ms: None,
     })
@@ -230,6 +231,88 @@ async fn client_view_focus_moves_only_the_addressed_client() {
         replacement.focused_tab_id.as_deref(),
         Some(tab_ids[2].as_str())
     );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn client_view_focus_on_a_pane_focuses_it_in_its_tab_for_that_client() {
+    let mut server = test_headless_server();
+    let first = crate::workspace::Workspace::test_new("first");
+    let mut second = crate::workspace::Workspace::test_new("second");
+    let left = second.tabs[0].root_pane;
+    let right = second.test_split(ratatui::layout::Direction::Horizontal);
+    second.tabs[0].layout.focus_pane(right);
+    second.test_add_tab(Some("other"));
+    server.app.state.workspaces = vec![first, second];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let snapshot = server.app.session_snapshot();
+    let second_id = snapshot.workspaces[1].workspace_id.clone();
+    let first_id = snapshot.workspaces[0].workspace_id.clone();
+    let second_tab = server.app.public_tab_id(1, 0).expect("second tab");
+    let first_tab = server.app.public_tab_id(0, 0).expect("first tab");
+    let other_tab = server
+        .app
+        .public_tab_id(1, 1)
+        .expect("second workspace's other tab");
+    let left_id = server.app.public_pane_id(1, left).expect("left pane id");
+    let a = connect_shell_with_view(&mut server, 7, None, Some("a"));
+    let b = connect_shell_with_view(&mut server, 8, None, Some("b"));
+    let _ = first_snapshot(&a);
+    let _ = first_snapshot(&b);
+
+    let response = call_api(
+        &mut server,
+        api::schema::Method::ClientViewFocus(api::schema::ClientViewFocusParams {
+            client_id: None,
+            client_tag: Some("b".into()),
+            workspace_id: second_id.clone(),
+            tab_id: None,
+            pane_id: Some(left_id.clone()),
+            wait: false,
+            timeout_ms: None,
+        }),
+    );
+
+    assert_eq!(response["result"]["type"], "client_view_focus");
+    assert_eq!(response["result"]["client"]["tab_id"], second_tab.as_str());
+    assert_eq!(response["result"]["client"]["pane_id"], left_id.as_str());
+    assert_eq!(response["result"]["client"]["zoomed"], false);
+    assert_eq!(
+        server.app.state.workspaces[1].tabs[0].layout.focused(),
+        left
+    );
+    assert_eq!(server.app.state.active, Some(0), "the server's focus stays");
+    // A pane outside the workspace, or outside the tab named with it, is refused.
+    for (workspace, tab) in [(&first_id, None), (&second_id, Some(&other_tab))] {
+        let refused = call_api(
+            &mut server,
+            api::schema::Method::ClientViewFocus(api::schema::ClientViewFocusParams {
+                client_id: None,
+                client_tag: Some("b".into()),
+                workspace_id: workspace.clone(),
+                tab_id: tab.cloned(),
+                pane_id: Some(left_id.clone()),
+                wait: false,
+                timeout_ms: None,
+            }),
+        );
+        assert_eq!(refused["error"]["code"], "pane_not_found");
+    }
+    assert_eq!(
+        server.shell_tab_id_for_client(7).as_deref(),
+        Some(first_tab.as_str())
+    );
+    server.render_and_stream();
+    assert!(
+        next_snapshot(&a).is_none(),
+        "a client on another workspace is not sent a new view"
+    );
+    let moved = next_snapshot(&b).expect("the addressed client's new view");
+    assert_eq!(moved.focused_pane_id.as_deref(), Some(left_id.as_str()));
+
     shutdown_test_runtimes(&mut server);
 }
 
@@ -443,6 +526,7 @@ fn waiting_focus(
         client_tag: Some(client_tag.to_owned()),
         workspace_id: workspace_id.to_owned(),
         tab_id: tab_id.map(str::to_owned),
+        pane_id: None,
         wait: true,
         timeout_ms,
     })
