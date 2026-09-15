@@ -71,6 +71,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
         surface_interest: true,
         health_check: true,
+        client_view_focus: true,
     })
 }
 
@@ -396,6 +397,8 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::CommandInvoke(_) => "command.invoke",
         Method::ClientWindowTitleSet(_) => "client.window_title.set",
         Method::ClientWindowTitleClear(_) => "client.window_title.clear",
+        Method::ClientList(_) => "client.list",
+        Method::ClientViewFocus(_) => "client.view.focus",
         Method::ClientShellSurfaceSet(_) => "client_shell.surface.set",
         Method::SessionSnapshot(_) => "session.snapshot",
         Method::WorkspaceCreate(_) => "workspace.create",
@@ -1149,6 +1152,7 @@ mod tests {
                 ),
                 surface_interest: true,
                 health_check: true,
+                client_view_focus: true,
             }),
             None,
             None,
@@ -1157,6 +1161,24 @@ mod tests {
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed.id, "req_1");
         assert!(matches!(parsed.result, ResponseResult::Pong { .. }));
+    }
+
+    #[test]
+    fn ping_advertises_client_view_focus() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let response = handle_request(
+            Request {
+                id: "req_view".into(),
+                method: Method::Ping(crate::api::schema::PingParams::default()),
+            },
+            &tx,
+            default_capabilities(),
+            None,
+            None,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["result"]["capabilities"]["client_view_focus"], true);
     }
 
     #[test]

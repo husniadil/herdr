@@ -1701,6 +1701,39 @@
           ],
           "type": "object"
         },
+        "ClientViewFocusParams": {
+          "description": "Moves the view of one connected client, addressed by exactly one of\n`client_id` or `client_tag`. Server focus and other clients stay where they are.",
+          "properties": {
+            "client_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "client_tag": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tab_id": {
+              "description": "Tab to show inside `workspace_id`. Omitted keeps the tab this client last\nshowed in that workspace.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id"
+          ],
+          "type": "object"
+        },
         "ClientWindowTitleSetParams": {
           "properties": {
             "title": {
@@ -4942,6 +4975,38 @@
         {
           "properties": {
             "method": {
+              "const": "client.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "client.view.focus",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ClientViewFocusParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "client_shell.surface.set",
               "type": "string"
             },
@@ -6832,6 +6897,38 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "ClientInfo": {
+          "description": "One connected client and the workspace and tab it shows.",
+          "properties": {
+            "client_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "client_tag": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tab_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "client_id"
+          ],
+          "type": "object"
         },
         "ClientWindowTitleReason": {
           "enum": [
@@ -10135,6 +10232,41 @@
             },
             {
               "properties": {
+                "clients": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/ClientInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "client_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "clients"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "client": {
+                  "$ref": "#/schemas/success_response/$defs/ClientInfo"
+                },
+                "type": {
+                  "const": "client_view_focus",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "client"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "integrations": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/IntegrationInfo"
@@ -10525,6 +10657,11 @@
         },
         "ServerCapabilities": {
           "properties": {
+            "client_view_focus": {
+              "default": false,
+              "description": "Whether this server lists connected clients (`client.list`), moves one\nclient's view without moving server focus (`client.view.focus`), and\nhonours `workspace_id` and `client_tag` in the endpoint hello.",
+              "type": "boolean"
+            },
             "detached_server_daemon": {
               "default": false,
               "type": "boolean"

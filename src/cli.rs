@@ -444,10 +444,10 @@ fn session_attach_help(args: &[String]) -> std::io::Result<i32> {
         args.first().map(String::as_str),
         Some("help" | "--help" | "-h")
     ) {
-        eprintln!("usage: herdr session attach <name>");
+        eprintln!("usage: herdr session attach <name> [--workspace <id>] [--client-tag <tag>]");
         return Ok(0);
     }
-    eprintln!("usage: herdr session attach <name>");
+    eprintln!("usage: herdr session attach <name> [--workspace <id>] [--client-tag <tag>]");
     Ok(2)
 }
 

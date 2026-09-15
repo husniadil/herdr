@@ -41,13 +41,17 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
         ) {
             return Ok(args.to_vec());
         }
+        const USAGE: &str =
+            "usage: herdr session attach <name> [--workspace <id>] [--client-tag <tag>]";
         let Some(name) = args.get(3) else {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err(USAGE.to_string());
         };
-        if args.len() != 4 {
-            return Err("usage: herdr session attach <name>".to_string());
+        // Launch options after the name attach like `herdr [options]` does.
+        if args.get(4).is_some_and(|option| !option.starts_with('-')) {
+            return Err(USAGE.to_string());
         }
         apply_explicit_name(name)?;
+        cleaned.extend_from_slice(&args[4..]);
         return Ok(cleaned);
     }
 
@@ -725,6 +729,27 @@ mod tests {
         assert_eq!(cleaned, vec!["herdr"]);
         std::env::remove_var(SESSION_ENV_VAR);
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+        clear_explicit_session_for_test();
+    }
+
+    #[test]
+    fn configure_from_args_keeps_launch_options_after_session_attach() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var(SESSION_ENV_VAR);
+        clear_explicit_session_for_test();
+        let args = ["herdr", "session", "attach", "work", "--workspace", "w_2"]
+            .map(String::from)
+            .to_vec();
+
+        let cleaned = configure_from_args(&args).unwrap();
+
+        assert_eq!(cleaned, vec!["herdr", "--workspace", "w_2"]);
+        assert_eq!(std::env::var(SESSION_ENV_VAR).as_deref(), Ok("work"));
+        let stray = ["herdr", "session", "attach", "work", "extra"]
+            .map(String::from)
+            .to_vec();
+        assert!(configure_from_args(&stray).is_err());
+        std::env::remove_var(SESSION_ENV_VAR);
         clear_explicit_session_for_test();
     }
 

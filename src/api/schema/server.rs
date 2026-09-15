@@ -27,4 +27,9 @@ pub struct ServerCapabilities {
     /// Whether this server supports endpoint health probes.
     #[serde(default)]
     pub health_check: bool,
+    /// Whether this server lists connected clients (`client.list`), moves one
+    /// client's view without moving server focus (`client.view.focus`), and
+    /// honours `workspace_id` and `client_tag` in the endpoint hello.
+    #[serde(default)]
+    pub client_view_focus: bool,
 }
