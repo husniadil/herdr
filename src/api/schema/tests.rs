@@ -728,6 +728,7 @@ fn success_response_round_trips() {
                 health_check: true,
                 ssh_agent_registration: false,
                 client_view_focus: false,
+                client_view_ack: false,
             }),
         },
     };

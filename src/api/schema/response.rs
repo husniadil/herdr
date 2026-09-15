@@ -208,6 +208,9 @@ pub enum ResponseResult {
     ClientViewFocus {
         client: ClientInfo,
     },
+    ClientViewWait {
+        client: ClientInfo,
+    },
     IntegrationList {
         integrations: Vec<super::integrations::IntegrationInfo>,
     },

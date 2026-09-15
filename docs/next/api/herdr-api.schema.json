@@ -1731,6 +1731,19 @@
                 "null"
               ]
             },
+            "timeout_ms": {
+              "description": "Longest wait in milliseconds when `wait` is set. Defaults to 5000, at most 60000.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "wait": {
+              "description": "Answer only once the client has applied a snapshot showing the new view, as\n`client.view.wait` does. Needs `client_view_ack`; a server without it ignores\nthis field and answers at once.",
+              "type": "boolean"
+            },
             "workspace_id": {
               "type": "string"
             }
@@ -1738,6 +1751,35 @@
           "required": [
             "workspace_id"
           ],
+          "type": "object"
+        },
+        "ClientViewWaitParams": {
+          "description": "Waits until one connected client, addressed by exactly one of `client_id` or\n`client_tag`, has applied a snapshot showing its current view.",
+          "properties": {
+            "client_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "client_tag": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_ms": {
+              "description": "Longest wait in milliseconds. Defaults to 5000, at most 60000.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
           "type": "object"
         },
         "ClientWindowTitleSetParams": {
@@ -4957,6 +4999,22 @@
         {
           "properties": {
             "method": {
+              "const": "client.view.wait",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ClientViewWaitParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "client_shell.surface.set",
               "type": "string"
             },
@@ -6842,8 +6900,17 @@
           "type": "string"
         },
         "ClientInfo": {
-          "description": "One connected client and the workspace and tab it shows.",
+          "description": "One connected client and the workspace, tab and pane it shows.",
           "properties": {
+            "applied_revision": {
+              "description": "Latest snapshot revision the client acknowledged applying.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "client_id": {
               "format": "uint64",
               "minimum": 0,
@@ -6855,9 +6922,44 @@
                 "null"
               ]
             },
+            "pane_id": {
+              "description": "Focused pane of the tab this client shows.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revision": {
+              "description": "Latest snapshot revision the server sent this client.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "snapshot_acks": {
+              "default": false,
+              "description": "Whether this client acknowledges the snapshots it applies. Only such a client\ncan be waited on.",
+              "type": "boolean"
+            },
             "tab_id": {
               "type": [
                 "string",
+                "null"
+              ]
+            },
+            "view_applied": {
+              "default": false,
+              "description": "Whether the client has applied a snapshot showing its current view, so input\nit sends now goes to `pane_id`.",
+              "type": "boolean"
+            },
+            "view_revision": {
+              "description": "First sent revision that carries the view (workspace, tab, focused pane and\nzoom) of the latest sent snapshot.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
                 "null"
               ]
             },
@@ -6866,6 +6968,11 @@
                 "string",
                 "null"
               ]
+            },
+            "zoomed": {
+              "default": false,
+              "description": "Whether the tab this client shows is zoomed.",
+              "type": "boolean"
             }
           },
           "required": [
@@ -10143,6 +10250,22 @@
             },
             {
               "properties": {
+                "client": {
+                  "$ref": "#/schemas/success_response/$defs/ClientInfo"
+                },
+                "type": {
+                  "const": "client_view_wait",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "client"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "integrations": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/IntegrationInfo"
@@ -10552,6 +10675,11 @@
         },
         "ServerCapabilities": {
           "properties": {
+            "client_view_ack": {
+              "default": false,
+              "description": "Whether this server records which snapshot each client has applied, reports it\nin `client.list`, waits on it in `client.view.wait`, and honours `wait` in\n`client.view.focus`.",
+              "type": "boolean"
+            },
             "client_view_focus": {
               "default": false,
               "description": "Whether this server lists connected clients (`client.list`), moves one\nclient's view without moving server focus (`client.view.focus`), and\nhonours `workspace_id` and `client_tag` in the endpoint hello.",
