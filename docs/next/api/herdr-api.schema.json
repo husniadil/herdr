@@ -1718,6 +1718,13 @@
                 "null"
               ]
             },
+            "pane_id": {
+              "description": "Pane to focus inside its tab, as a click on it would: the client is moved onto\nthat pane's tab and the tab's focused pane becomes this one. The tab's zoom is\nleft as it is. Must be in `workspace_id`, and in `tab_id` when that is given.\nNeeds `client_view_pane`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "tab_id": {
               "description": "Tab to show inside `workspace_id`. Omitted keeps the tab this client last\nshowed in that workspace.",
               "type": [
@@ -10852,6 +10859,11 @@
             "client_view_focus": {
               "default": false,
               "description": "Whether this server lists connected clients (`client.list`), moves one\nclient's view without moving server focus (`client.view.focus`), and\nhonours `workspace_id` and `client_tag` in the endpoint hello.",
+              "type": "boolean"
+            },
+            "client_view_pane": {
+              "default": false,
+              "description": "Whether this server honours `pane_id` in `client.view.focus`.",
               "type": "boolean"
             },
             "detached_server_daemon": {
