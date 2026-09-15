@@ -2,6 +2,40 @@ use super::*;
 use crate::server::client_shell::resize_popup_runtime;
 use crate::server::clients::ClientShellTopology;
 
+/// How long `client.view.wait` and a waiting `client.view.focus` wait when the caller
+/// names no timeout, and the longest a caller may ask for.
+const DEFAULT_CLIENT_VIEW_WAIT_MS: u64 = 5_000;
+const MAX_CLIENT_VIEW_WAIT_MS: u64 = 60_000;
+
+/// Which method a pending view wait answers as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClientViewWaitReply {
+    Focus,
+    Wait,
+}
+
+/// A request answered once one client has applied a snapshot showing its current view,
+/// or with `timeout` at its deadline.
+pub(crate) struct PendingClientViewWait {
+    client_id: u64,
+    request_id: String,
+    respond_to: std::sync::mpsc::Sender<String>,
+    reply: ClientViewWaitReply,
+    pub(super) deadline: Instant,
+}
+
+fn client_view_wait_timeout(timeout_ms: Option<u64>) -> Result<Duration, (&'static str, String)> {
+    match timeout_ms.unwrap_or(DEFAULT_CLIENT_VIEW_WAIT_MS) {
+        timeout_ms if timeout_ms <= MAX_CLIENT_VIEW_WAIT_MS => {
+            Ok(Duration::from_millis(timeout_ms))
+        }
+        timeout_ms => Err((
+            "invalid_params",
+            format!("timeout_ms {timeout_ms} is above the {MAX_CLIENT_VIEW_WAIT_MS} ms limit"),
+        )),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ShellFocusTarget {
     pub(super) tab_id: String,
@@ -933,12 +967,201 @@ impl HeadlessServer {
     fn client_info(&self, client_id: u64) -> Option<api::schema::ClientInfo> {
         let client = self.clients.get(&client_id)?;
         let target = self.shell_target_for_client(client_id);
+        let view = crate::server::client_shell::view(&self.app, client.shell_location.as_ref());
         Some(api::schema::ClientInfo {
             client_id,
             client_tag: client.client_tag.clone(),
             workspace_id: target.map(|target| self.app.public_workspace_id(target.workspace_index)),
             tab_id: target.and_then(|target| self.tab_id_for_target(target)),
+            snapshot_acks: client.shell_snapshot_acks,
+            revision: client
+                .shell_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.revision),
+            view_revision: client
+                .shell_snapshot
+                .as_ref()
+                .map(|_| client.shell_view_revision),
+            applied_revision: client.shell_applied_revision,
+            view_applied: self.client_view_applied(client_id, &view),
+            pane_id: view.pane_id,
+            zoomed: view.zoomed,
         })
+    }
+
+    /// Whether this client acknowledged a snapshot that carries `view`, the view the
+    /// server presents for it now. Such a client routes input to `view.pane_id`.
+    fn client_view_applied(
+        &self,
+        client_id: u64,
+        view: &crate::server::client_shell::ClientShellView,
+    ) -> bool {
+        let Some(client) = self.clients.get(&client_id) else {
+            return false;
+        };
+        let Some(sent) = client.shell_snapshot.as_ref() else {
+            return false;
+        };
+        client.shell_snapshot_acks
+            && client
+                .shell_applied_revision
+                .is_some_and(|applied| applied >= client.shell_view_revision)
+            && &crate::server::client_shell::ClientShellView::of_snapshot(sent) == view
+    }
+
+    fn client_view_applied_now(&self, client_id: u64) -> bool {
+        let Some(client) = self.clients.get(&client_id) else {
+            return false;
+        };
+        let view = crate::server::client_shell::view(&self.app, client.shell_location.as_ref());
+        self.client_view_applied(client_id, &view)
+    }
+
+    /// Records a client's acknowledgement of a snapshot it applied. An acknowledgement
+    /// for another boot or for a revision this connection was never sent is ignored.
+    pub(super) fn record_client_snapshot_applied(
+        &mut self,
+        client_id: u64,
+        boot_id: &str,
+        revision: u64,
+    ) {
+        if boot_id != self.client_shell_boot_id {
+            return;
+        }
+        let Some(client) = self
+            .clients
+            .get_mut(&client_id)
+            .filter(|client| client.is_shell_client())
+        else {
+            return;
+        };
+        if revision > client.shell_projection_revision {
+            return;
+        }
+        client.shell_applied_revision = Some(
+            client
+                .shell_applied_revision
+                .map_or(revision, |applied| applied.max(revision)),
+        );
+    }
+
+    fn client_view_wait_response(
+        &self,
+        request_id: String,
+        client_id: u64,
+        reply: ClientViewWaitReply,
+    ) -> String {
+        let Some(client) = self.client_info(client_id) else {
+            return crate::server::client_commands::error_response(
+                request_id,
+                "client_not_found",
+                format!("client {client_id} not found"),
+            );
+        };
+        let result = match reply {
+            ClientViewWaitReply::Focus => api::schema::ResponseResult::ClientViewFocus { client },
+            ClientViewWaitReply::Wait => api::schema::ResponseResult::ClientViewWait { client },
+        };
+        serde_json::to_string(&api::schema::SuccessResponse {
+            id: request_id,
+            result,
+        })
+        .unwrap_or_else(|_| "{}".to_string())
+    }
+
+    fn client_without_snapshot_acks_error(client_id: u64) -> (&'static str, String) {
+        (
+            "client_view_ack_unsupported",
+            format!("client {client_id} does not acknowledge applied snapshots, so it cannot be waited on"),
+        )
+    }
+
+    /// Answers at once when the view is already applied, and otherwise leaves the request
+    /// to [`Self::poll_pending_client_view_waits`].
+    fn start_client_view_wait(
+        &mut self,
+        client_id: u64,
+        request_id: String,
+        respond_to: std::sync::mpsc::Sender<String>,
+        reply: ClientViewWaitReply,
+        timeout: Duration,
+    ) {
+        if self.client_view_applied_now(client_id) {
+            let _ = respond_to.send(self.client_view_wait_response(request_id, client_id, reply));
+            return;
+        }
+        self.pending_client_view_waits.push(PendingClientViewWait {
+            client_id,
+            request_id,
+            respond_to,
+            reply,
+            deadline: Instant::now() + timeout,
+        });
+    }
+
+    pub(super) fn poll_pending_client_view_waits(&mut self, now: Instant) {
+        if self.pending_client_view_waits.is_empty() {
+            return;
+        }
+        for wait in std::mem::take(&mut self.pending_client_view_waits) {
+            let connected = self
+                .clients
+                .get(&wait.client_id)
+                .is_some_and(|client| client.is_shell_client() && client.writer.is_some());
+            let response = if !connected {
+                crate::server::client_commands::error_response(
+                    wait.request_id,
+                    "client_not_found",
+                    format!("client {} disconnected", wait.client_id),
+                )
+            } else if self.client_view_applied_now(wait.client_id) {
+                self.client_view_wait_response(wait.request_id, wait.client_id, wait.reply)
+            } else if now >= wait.deadline {
+                crate::server::client_commands::error_response(
+                    wait.request_id,
+                    "timeout",
+                    format!(
+                        "client {} did not apply a snapshot showing its view in time",
+                        wait.client_id
+                    ),
+                )
+            } else {
+                self.pending_client_view_waits.push(wait);
+                continue;
+            };
+            let _ = wait.respond_to.send(response);
+        }
+    }
+
+    pub(super) fn handle_client_view_wait_api(
+        &mut self,
+        id: String,
+        params: api::schema::ClientViewWaitParams,
+        respond_to: std::sync::mpsc::Sender<String>,
+    ) {
+        let started = self
+            .resolve_view_client(params.client_id, params.client_tag.as_deref())
+            .and_then(|client_id| {
+                let timeout = client_view_wait_timeout(params.timeout_ms)?;
+                if !self.clients[&client_id].shell_snapshot_acks {
+                    return Err(Self::client_without_snapshot_acks_error(client_id));
+                }
+                Ok((client_id, timeout))
+            });
+        match started {
+            Ok((client_id, timeout)) => self.start_client_view_wait(
+                client_id,
+                id,
+                respond_to,
+                ClientViewWaitReply::Wait,
+                timeout,
+            ),
+            Err((code, message)) => {
+                let _ = respond_to.send(crate::server::client_commands::error_response(
+                    id, code, message,
+                ));
+            }
+        }
     }
 
     fn resolve_view_client(
@@ -999,18 +1222,31 @@ impl HeadlessServer {
         &mut self,
         id: String,
         params: api::schema::ClientViewFocusParams,
-    ) -> (String, bool) {
+        respond_to: std::sync::mpsc::Sender<String>,
+    ) -> bool {
         let error = |id: String, (code, message): (&str, String)| {
-            (
-                crate::server::client_commands::error_response(id, code, message),
-                false,
-            )
+            let _ = respond_to.send(crate::server::client_commands::error_response(
+                id, code, message,
+            ));
+            false
         };
         let client_id =
             match self.resolve_view_client(params.client_id, params.client_tag.as_deref()) {
                 Ok(client_id) => client_id,
                 Err(failure) => return error(id, failure),
             };
+        // A wait that cannot be honoured fails before the view moves.
+        let wait_timeout = match params
+            .wait
+            .then(|| client_view_wait_timeout(params.timeout_ms))
+        {
+            Some(Err(failure)) => return error(id, failure),
+            Some(Ok(_)) if !self.clients[&client_id].shell_snapshot_acks => {
+                return error(id, Self::client_without_snapshot_acks_error(client_id));
+            }
+            Some(Ok(timeout)) => Some(timeout),
+            None => None,
+        };
         let Some(workspace_index) = self
             .app
             .parse_workspace_id(&params.workspace_id)
@@ -1086,17 +1322,22 @@ impl HeadlessServer {
         }
         self.sync_client_window_title(client_id);
 
-        let Some(client) = self.client_info(client_id) else {
-            return error(
+        match wait_timeout {
+            Some(timeout) => self.start_client_view_wait(
+                client_id,
                 id,
-                ("client_not_found", format!("client {client_id} not found")),
-            );
-        };
-        let response = serde_json::to_string(&api::schema::SuccessResponse {
-            id,
-            result: api::schema::ResponseResult::ClientViewFocus { client },
-        })
-        .unwrap_or_else(|_| "{}".to_string());
-        (response, true)
+                respond_to,
+                ClientViewWaitReply::Focus,
+                timeout,
+            ),
+            None => {
+                let _ = respond_to.send(self.client_view_wait_response(
+                    id,
+                    client_id,
+                    ClientViewWaitReply::Focus,
+                ));
+            }
+        }
+        true
     }
 }

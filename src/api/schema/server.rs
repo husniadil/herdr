@@ -32,4 +32,9 @@ pub struct ServerCapabilities {
     /// honours `workspace_id` and `client_tag` in the endpoint hello.
     #[serde(default)]
     pub client_view_focus: bool,
+    /// Whether this server records which snapshot each client has applied, reports it
+    /// in `client.list`, waits on it in `client.view.wait`, and honours `wait` in
+    /// `client.view.focus`.
+    #[serde(default)]
+    pub client_view_ack: bool,
 }

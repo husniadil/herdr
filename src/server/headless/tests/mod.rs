@@ -80,6 +80,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         terminal_attach_owners: HashMap::new(),
         pending_alt_screen_reads: Vec::new(),
         deferred_alt_screen_reads: Vec::new(),
+        pending_client_view_waits: Vec::new(),
         next_activity_stamp: 1,
         headless_size,
         effective_size: headless_size,
@@ -681,6 +682,7 @@ async fn client_shell_attach_seeds_workspace() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id: 6,
             surface_cols: 80,
             surface_rows: 23,
@@ -713,6 +715,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id,
             surface_cols: 80,
             surface_rows: 23,
@@ -851,6 +854,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id: 7,
             surface_cols: 80,
             surface_rows: 23,
@@ -997,6 +1001,7 @@ fn connect_test_shell(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id,
             surface_cols,
             surface_rows,
@@ -1325,6 +1330,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id: 13,
             surface_cols: 80,
             surface_rows: 23,
@@ -1351,6 +1357,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id: 14,
             surface_cols: 80,
             surface_rows: 23,
@@ -2052,6 +2059,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id: 9,
             surface_cols: 80,
             surface_rows: 23,
@@ -2304,6 +2312,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
             client_id: 12,
             surface_cols: 80,
             surface_rows: 23,

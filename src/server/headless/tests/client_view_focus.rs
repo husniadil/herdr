@@ -11,6 +11,7 @@ fn connect_shell_with_view(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             workspace_id: workspace_id.map(str::to_owned),
             client_tag: client_tag.map(str::to_owned),
+            snapshot_acks: false,
             client_id,
             surface_cols: 80,
             surface_rows: 23,
@@ -79,6 +80,8 @@ fn focus_params(
         client_tag: client_tag.map(str::to_owned),
         workspace_id: workspace_id.to_owned(),
         tab_id: tab_id.map(str::to_owned),
+        wait: false,
+        timeout_ms: None,
     })
 }
 
@@ -292,22 +295,17 @@ async fn client_list_reports_tags_and_views() {
     );
 
     assert_eq!(response["result"]["type"], "client_list");
-    assert_eq!(
-        response["result"]["clients"],
-        serde_json::json!([
-            {
-                "client_id": 7,
-                "workspace_id": workspace_ids[0],
-                "tab_id": tab_ids[0],
-            },
-            {
-                "client_id": 8,
-                "client_tag": "b",
-                "workspace_id": workspace_ids[1],
-                "tab_id": tab_ids[1],
-            },
-        ])
-    );
+    let clients = &response["result"]["clients"];
+    assert_eq!(clients.as_array().map(Vec::len), Some(2));
+    for (client, id, tag, workspace, tab) in [
+        (&clients[0], 7, None, &workspace_ids[0], &tab_ids[0]),
+        (&clients[1], 8, Some("b"), &workspace_ids[1], &tab_ids[1]),
+    ] {
+        assert_eq!(client["client_id"], id);
+        assert_eq!(client["client_tag"].as_str(), tag);
+        assert_eq!(client["workspace_id"], workspace.as_str());
+        assert_eq!(client["tab_id"], tab.as_str());
+    }
     shutdown_test_runtimes(&mut server);
 }
 
@@ -363,5 +361,339 @@ async fn client_view_focus_rejects_bad_addresses_and_targets() {
             Some(tab_ids[0].as_str())
         );
     }
+    shutdown_test_runtimes(&mut server);
+}
+
+fn connect_acking_shell(
+    server: &mut HeadlessServer,
+    client_id: u64,
+    client_tag: &str,
+) -> (
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    let (writer, control, render) = test_client_writer();
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellConnected {
+            workspace_id: None,
+            client_tag: Some(client_tag.to_owned()),
+            snapshot_acks: true,
+            client_id,
+            surface_cols: 80,
+            surface_rows: 23,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: false,
+            surface_active: true,
+            writer,
+        })
+    );
+    // The render channel stays open so a render does not drop the client.
+    (control, render)
+}
+
+fn acknowledge(server: &mut HeadlessServer, client_id: u64, revision: u64) {
+    let boot_id = server.client_shell_boot_id.clone();
+    assert!(
+        !server.handle_server_event(ServerEvent::ClientShellSnapshotApplied {
+            client_id,
+            boot_id,
+            revision,
+        }),
+        "an acknowledgement alone never renders"
+    );
+}
+
+/// Sends a request and returns the channel its answer arrives on, which may be later.
+fn start_api(
+    server: &mut HeadlessServer,
+    method: api::schema::Method,
+) -> std::sync::mpsc::Receiver<String> {
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
+        request: api::schema::Request {
+            id: "test.client.view.wait".into(),
+            method,
+        },
+        respond_to,
+        response_write_complete: None,
+        stream_active: None,
+    });
+    response_rx
+}
+
+fn answered(response_rx: &std::sync::mpsc::Receiver<String>) -> Option<serde_json::Value> {
+    response_rx
+        .try_recv()
+        .ok()
+        .map(|response| serde_json::from_str(&response).expect("json response"))
+}
+
+fn waiting_focus(
+    client_tag: &str,
+    workspace_id: &str,
+    tab_id: Option<&str>,
+    timeout_ms: Option<u64>,
+) -> api::schema::Method {
+    api::schema::Method::ClientViewFocus(api::schema::ClientViewFocusParams {
+        client_id: None,
+        client_tag: Some(client_tag.to_owned()),
+        workspace_id: workspace_id.to_owned(),
+        tab_id: tab_id.map(str::to_owned),
+        wait: true,
+        timeout_ms,
+    })
+}
+
+fn view_wait(client_tag: &str, timeout_ms: Option<u64>) -> api::schema::Method {
+    api::schema::Method::ClientViewWait(api::schema::ClientViewWaitParams {
+        client_id: None,
+        client_tag: Some(client_tag.to_owned()),
+        timeout_ms,
+    })
+}
+
+fn client_list(server: &mut HeadlessServer) -> serde_json::Value {
+    call_api(
+        server,
+        api::schema::Method::ClientList(api::schema::EmptyParams::default()),
+    )["result"]["clients"]
+        .clone()
+}
+
+#[tokio::test]
+async fn client_list_reports_revisions_panes_and_applied_views() {
+    let (mut server, workspace_ids, tab_ids) = two_workspace_server();
+    let _old = connect_shell_with_view(&mut server, 7, None, None);
+    let _acking = connect_acking_shell(&mut server, 8, "b");
+    let first_pane = server
+        .app
+        .public_pane_id(0, server.app.state.workspaces[0].tabs[0].layout.focused());
+
+    assert_eq!(
+        client_list(&mut server),
+        serde_json::json!([
+            {
+                "client_id": 7,
+                "workspace_id": workspace_ids[0],
+                "tab_id": tab_ids[0],
+                "pane_id": first_pane,
+                "zoomed": false,
+                "snapshot_acks": false,
+                "revision": 1,
+                "view_revision": 1,
+                "view_applied": false,
+            },
+            {
+                "client_id": 8,
+                "client_tag": "b",
+                "workspace_id": workspace_ids[0],
+                "tab_id": tab_ids[0],
+                "pane_id": first_pane,
+                "zoomed": false,
+                "snapshot_acks": true,
+                "revision": 1,
+                "view_revision": 1,
+                "view_applied": false,
+            },
+        ])
+    );
+
+    let other_boot = ServerEvent::ClientShellSnapshotApplied {
+        client_id: 8,
+        boot_id: "another-boot".into(),
+        revision: 1,
+    };
+    assert!(!server.handle_server_event(other_boot));
+    acknowledge(&mut server, 8, 2);
+    assert_eq!(
+        client_list(&mut server)[1]["applied_revision"],
+        serde_json::Value::Null,
+        "an acknowledgement for another boot or an unsent revision is ignored"
+    );
+
+    acknowledge(&mut server, 8, 1);
+    acknowledge(&mut server, 7, 1);
+    let clients = client_list(&mut server);
+    assert_eq!(clients[1]["applied_revision"], 1);
+    assert_eq!(clients[1]["view_applied"], true);
+    assert_eq!(
+        clients[0]["view_applied"], false,
+        "a client whose hello did not offer acknowledgements is never reported as applied"
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn waiting_view_focus_answers_only_after_the_client_applies_the_new_view() {
+    let (mut server, workspace_ids, tab_ids) = two_workspace_server();
+    let (control, _render) = connect_acking_shell(&mut server, 8, "b");
+    let seed = first_snapshot(&control);
+    acknowledge(&mut server, 8, seed.revision);
+
+    let response_rx = start_api(
+        &mut server,
+        waiting_focus("b", &workspace_ids[1], Some(&tab_ids[2]), None),
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(8).as_deref(),
+        Some(tab_ids[2].as_str()),
+        "the view moves before the answer"
+    );
+    server.poll_pending_client_view_waits(Instant::now());
+    assert!(answered(&response_rx).is_none(), "no snapshot was sent yet");
+
+    server.render_and_stream();
+    let moved = next_snapshot(&control).expect("snapshot showing the new view");
+    assert_eq!(moved.focused_tab_id.as_deref(), Some(tab_ids[2].as_str()));
+    server.poll_pending_client_view_waits(Instant::now());
+    assert!(
+        answered(&response_rx).is_none(),
+        "a sent snapshot is not an applied one"
+    );
+
+    acknowledge(&mut server, 8, seed.revision);
+    server.poll_pending_client_view_waits(Instant::now());
+    assert!(
+        answered(&response_rx).is_none(),
+        "the acknowledged snapshot still shows the old view"
+    );
+
+    acknowledge(&mut server, 8, moved.revision);
+    server.poll_pending_client_view_waits(Instant::now());
+    let response = answered(&response_rx).expect("answer once the new view is applied");
+    assert_eq!(response["result"]["type"], "client_view_focus");
+    let client = &response["result"]["client"];
+    assert_eq!(client["tab_id"], tab_ids[2].as_str());
+    assert_eq!(
+        client["pane_id"],
+        moved.focused_pane_id.clone().unwrap().as_str()
+    );
+    assert_eq!(client["applied_revision"], moved.revision);
+    assert_eq!(client["view_applied"], true);
+    assert!(server.pending_client_view_waits.is_empty());
+    assert_eq!(server.app.state.active, Some(0));
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn view_wait_times_out_when_the_client_never_acknowledges() {
+    let (mut server, workspace_ids, tab_ids) = two_workspace_server();
+    let (control, _render) = connect_acking_shell(&mut server, 8, "b");
+    let _ = first_snapshot(&control);
+
+    let response_rx = start_api(
+        &mut server,
+        waiting_focus("b", &workspace_ids[1], None, Some(250)),
+    );
+    server.render_and_stream();
+    server.poll_pending_client_view_waits(Instant::now());
+    assert!(answered(&response_rx).is_none());
+    let deadline = server.pending_client_view_waits[0].deadline;
+
+    server.poll_pending_client_view_waits(deadline);
+    let response = answered(&response_rx).expect("timeout answer at the deadline");
+    assert_eq!(response["error"]["code"], "timeout", "{response}");
+    assert!(server.pending_client_view_waits.is_empty());
+    assert_eq!(
+        server.shell_tab_id_for_client(8).as_deref(),
+        Some(tab_ids[1].as_str()),
+        "a timed-out wait leaves the view where it was moved"
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn view_wait_follows_a_zoom_of_the_viewed_tab() {
+    let (mut server, _, _) = two_workspace_server();
+    let (control, _render) = connect_acking_shell(&mut server, 8, "b");
+    let seed = first_snapshot(&control);
+    acknowledge(&mut server, 8, seed.revision);
+
+    let applied = call_api(&mut server, view_wait("b", None));
+    assert_eq!(applied["result"]["type"], "client_view_wait");
+    assert_eq!(applied["result"]["client"]["zoomed"], false);
+
+    // What `pane.zoom` changes; the client's routing snapshot now differs from it.
+    server.app.state.workspaces[0].tabs[0].zoomed = true;
+    let response_rx = start_api(&mut server, view_wait("b", None));
+    server.poll_pending_client_view_waits(Instant::now());
+    assert!(answered(&response_rx).is_none());
+
+    server.render_and_stream();
+    let zoomed = next_snapshot(&control).expect("snapshot carrying the zoom");
+    acknowledge(&mut server, 8, zoomed.revision);
+    server.poll_pending_client_view_waits(Instant::now());
+    let response = answered(&response_rx).expect("answer once the zoom is applied");
+    assert_eq!(response["result"]["client"]["zoomed"], true, "{response}");
+    assert_eq!(
+        response["result"]["client"]["view_revision"],
+        zoomed.revision
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn view_waits_refuse_clients_without_acknowledgements_before_moving_them() {
+    let (mut server, workspace_ids, tab_ids) = two_workspace_server();
+    let _old = connect_shell_with_view(&mut server, 7, None, Some("old"));
+    let _acking = connect_acking_shell(&mut server, 8, "b");
+
+    let focus = call_api(
+        &mut server,
+        waiting_focus("old", &workspace_ids[1], None, None),
+    );
+    assert_eq!(
+        focus["error"]["code"], "client_view_ack_unsupported",
+        "{focus}"
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(7).as_deref(),
+        Some(tab_ids[0].as_str())
+    );
+    let wait = call_api(&mut server, view_wait("old", None));
+    assert_eq!(
+        wait["error"]["code"], "client_view_ack_unsupported",
+        "{wait}"
+    );
+
+    let too_long = call_api(
+        &mut server,
+        waiting_focus("b", &workspace_ids[1], None, Some(60_001)),
+    );
+    assert_eq!(too_long["error"]["code"], "invalid_params", "{too_long}");
+    assert_eq!(
+        server.shell_tab_id_for_client(8).as_deref(),
+        Some(tab_ids[0].as_str())
+    );
+    let missing = call_api(&mut server, view_wait("missing", None));
+    assert_eq!(missing["error"]["code"], "client_not_found", "{missing}");
+
+    let plain = call_api(
+        &mut server,
+        focus_params(None, Some("old"), &workspace_ids[1], None),
+    );
+    assert_eq!(plain["result"]["type"], "client_view_focus");
+    assert!(server.pending_client_view_waits.is_empty());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn view_wait_ends_when_the_client_disconnects() {
+    let (mut server, _, _) = two_workspace_server();
+    let (control, _render) = connect_acking_shell(&mut server, 8, "b");
+    let _ = first_snapshot(&control);
+
+    let response_rx = start_api(&mut server, view_wait("b", None));
+    server.poll_pending_client_view_waits(Instant::now());
+    assert!(answered(&response_rx).is_none());
+
+    assert!(server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 8 }));
+    server.poll_pending_client_view_waits(Instant::now());
+    let response = answered(&response_rx).expect("answer when the client goes");
+    assert_eq!(response["error"]["code"], "client_not_found", "{response}");
     shutdown_test_runtimes(&mut server);
 }

@@ -399,6 +399,8 @@ pub(crate) enum ServerEvent {
         workspace_id: Option<String>,
         /// Caller-chosen label from the hello.
         client_tag: Option<String>,
+        /// Whether the hello said this client acknowledges applied snapshots.
+        snapshot_acks: bool,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -502,6 +504,12 @@ pub(crate) enum ServerEvent {
     ClientShellMouseCapture { client_id: u64, enabled: bool },
     /// The committed shell asks the server to replay presentation effects before input resumes.
     ClientShellPresentationSync { client_id: u64, token: String },
+    /// A client-owned shell applied the snapshot with this boot and revision.
+    ClientShellSnapshotApplied {
+        client_id: u64,
+        boot_id: String,
+        revision: u64,
+    },
     /// A client-owned shell invoked one endpoint operation through this connection.
     ClientShellEndpointRequest {
         client_id: u64,
@@ -773,6 +781,7 @@ pub(crate) fn handle_client_handshake(
                     hello.surface_active,
                     hello.workspace_id,
                     hello.client_tag,
+                    hello.snapshot_acks,
                 )),
             )
         }
@@ -869,6 +878,7 @@ pub(crate) fn handle_client_handshake(
         surface_active,
         workspace_id,
         client_tag,
+        snapshot_acks,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -884,6 +894,7 @@ pub(crate) fn handle_client_handshake(
             surface_active,
             workspace_id,
             client_tag,
+            snapshot_acks,
             writer,
         }
     } else {
@@ -1306,6 +1317,23 @@ fn client_read_loop_with_endpoint_controls(
                     token: data,
                 }
             }
+            ClientMessage::EndpointControl { kind, data }
+                if kind == crate::protocol::endpoint::SNAPSHOT_APPLIED_KIND =>
+            {
+                match serde_json::from_str::<crate::protocol::endpoint::EndpointSnapshotApplied>(
+                    &data,
+                ) {
+                    Ok(applied) => ServerEvent::ClientShellSnapshotApplied {
+                        client_id,
+                        boot_id: applied.boot_id,
+                        revision: applied.revision,
+                    },
+                    Err(error) => {
+                        debug!(client_id, %error, "ignoring malformed snapshot acknowledgement");
+                        continue;
+                    }
+                }
+            }
             ClientMessage::EndpointControl { kind, data } => {
                 let Some(response) = crate::server::client_endpoint_control::response(&kind, data)
                 else {
@@ -1440,6 +1468,7 @@ mod tests {
             blob_codecs: vec![crate::protocol::endpoint::BLOB_CODEC_V1.into()],
             workspace_id: None,
             client_tag: None,
+            snapshot_acks: false,
         };
         ClientMessage::EndpointControl {
             kind: ENDPOINT_HELLO_KIND.into(),
@@ -1850,10 +1879,12 @@ mod tests {
                 surface_active,
                 workspace_id,
                 client_tag,
+                snapshot_acks,
                 writer,
             } => {
                 assert_eq!(workspace_id, None);
                 assert_eq!(client_tag, None);
+                assert!(!snapshot_acks, "a hello without snapshot_acks does not ack");
                 assert_eq!(client_id, 43);
                 assert_eq!((surface_cols, surface_rows), (80, 29));
                 assert_eq!((cell_width_px, cell_height_px), (8, 16));
@@ -1916,6 +1947,7 @@ mod tests {
         if let Some(client_tag) = client_tag {
             hello["client_tag"] = serde_json::json!(client_tag);
         }
+        hello["snapshot_acks"] = serde_json::json!(true);
         ClientMessage::EndpointControl {
             kind,
             data: hello.to_string(),
@@ -1945,6 +1977,10 @@ mod tests {
         assert!(welcome.capabilities.iter().any(
             |capability| capability == crate::protocol::endpoint::CLIENT_VIEW_FOCUS_CAPABILITY
         ));
+        assert!(welcome
+            .capabilities
+            .iter()
+            .any(|capability| capability == crate::protocol::endpoint::CLIENT_VIEW_ACK_CAPABILITY));
         match server_event_rx
             .blocking_recv()
             .expect("client shell connected event")
@@ -1952,11 +1988,13 @@ mod tests {
             ServerEvent::ClientShellConnected {
                 workspace_id,
                 client_tag,
+                snapshot_acks,
                 writer,
                 ..
             } => {
                 assert_eq!(workspace_id.as_deref(), Some("w_2"));
                 assert_eq!(client_tag.as_deref(), Some("browser-1"));
+                assert!(snapshot_acks);
                 drop(writer);
             }
             other => panic!("expected ClientShellConnected, got {other:?}"),
@@ -2059,6 +2097,52 @@ mod tests {
 
         assert!(matches!(
             recv_server_event(&mut server_event_rx, "detach after future control"),
+            ServerEvent::ClientDetach { client_id: 7 }
+        ));
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn client_read_loop_forwards_snapshot_acknowledgements_and_ignores_malformed_ones() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-read-snapshot-ack");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::EndpointControl {
+                kind: crate::protocol::endpoint::SNAPSHOT_APPLIED_KIND.into(),
+                data: "not json".into(),
+            },
+        )
+        .unwrap();
+        protocol::write_message(
+            &mut client_stream,
+            &crate::protocol::endpoint::snapshot_applied_message("boot", 9).unwrap(),
+        )
+        .unwrap();
+        protocol::write_message(&mut client_stream, &ClientMessage::Detach).unwrap();
+
+        match recv_server_event(&mut server_event_rx, "snapshot acknowledgement") {
+            ServerEvent::ClientShellSnapshotApplied {
+                client_id,
+                boot_id,
+                revision,
+            } => {
+                assert_eq!((client_id, boot_id.as_str(), revision), (7, "boot", 9));
+            }
+            other => panic!("expected ClientShellSnapshotApplied, got {other:?}"),
+        }
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "detach after acknowledgement"),
             ServerEvent::ClientDetach { client_id: 7 }
         ));
         handle

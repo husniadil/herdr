@@ -234,6 +234,8 @@ pub struct HeadlessServer {
     pending_alt_screen_reads: Vec<crate::server::alt_screen_read::PendingAltScreenRead>,
     /// Reads waiting for an alternate-screen traversal of the same terminal to finish.
     deferred_alt_screen_reads: Vec<api::ApiRequestMessage>,
+    /// Requests waiting for one client to apply a snapshot showing its current view.
+    pending_client_view_waits: Vec<client_views::PendingClientViewWait>,
     /// Monotonic activity counter used to pick the most recently active client.
     next_activity_stamp: u64,
     /// Configured virtual terminal size used when no clients are connected.
@@ -369,6 +371,7 @@ impl HeadlessServer {
             terminal_attach_owners: HashMap::new(),
             pending_alt_screen_reads: Vec::new(),
             deferred_alt_screen_reads: Vec::new(),
+            pending_client_view_waits: Vec::new(),
             next_activity_stamp: 1,
             headless_size,
             effective_size: headless_size,
@@ -511,6 +514,7 @@ impl HeadlessServer {
             }
 
             self.poll_pending_alt_screen_reads(now);
+            self.poll_pending_client_view_waits(now);
             if self.process_deferred_alt_screen_reads() {
                 needs_render = true;
                 needs_full_render = true;
@@ -616,6 +620,13 @@ impl HeadlessServer {
                 .pending_alt_screen_reads
                 .iter()
                 .map(|pending| pending.next_deadline())
+                .fold(next_deadline, |deadline, pending| {
+                    Some(deadline.map_or(pending, |current| current.min(pending)))
+                });
+            let next_deadline = self
+                .pending_client_view_waits
+                .iter()
+                .map(|pending| pending.deadline)
                 .fold(next_deadline, |deadline, pending| {
                     Some(deadline.map_or(pending, |current| current.min(pending)))
                 });
@@ -1992,6 +2003,7 @@ impl HeadlessServer {
                 surface_active,
                 workspace_id,
                 client_tag,
+                snapshot_acks,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -2039,6 +2051,8 @@ impl HeadlessServer {
                 connection.shell_surface_active = surface_active;
                 connection.shell_projection_revision = 1;
                 connection.client_tag = client_tag;
+                connection.shell_snapshot_acks = snapshot_acks;
+                connection.shell_view_revision = connection.shell_projection_revision;
                 let config_diagnostic = if endpoint_keybindings {
                     self.server_config_diagnostic.as_deref()
                 } else {
@@ -2397,6 +2411,14 @@ impl HeadlessServer {
                 client.shell_mouse_capture = enabled;
                 client.host_mouse_capture_active = None;
                 true
+            }
+            ServerEvent::ClientShellSnapshotApplied {
+                client_id,
+                boot_id,
+                revision,
+            } => {
+                self.record_client_snapshot_applied(client_id, &boot_id, revision);
+                false
             }
             ServerEvent::ClientShellPresentationSync { client_id, token } => {
                 let Some(client) = self.clients.get_mut(&client_id) else {
@@ -3048,10 +3070,19 @@ impl HeadlessServer {
                 return false;
             }
             api::schema::Method::ClientViewFocus(params) => {
-                let (response, changed) =
-                    self.handle_client_view_focus_api(msg.request.id.clone(), params.clone());
-                let _ = msg.respond_to.send(response);
-                return changed;
+                return self.handle_client_view_focus_api(
+                    msg.request.id.clone(),
+                    params.clone(),
+                    msg.respond_to,
+                );
+            }
+            api::schema::Method::ClientViewWait(params) => {
+                self.handle_client_view_wait_api(
+                    msg.request.id.clone(),
+                    params.clone(),
+                    msg.respond_to,
+                );
+                return false;
             }
             _ => {}
         }

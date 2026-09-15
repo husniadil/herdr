@@ -971,6 +971,9 @@ pub(crate) struct ClientShellState {
     pub(super) config_diagnostic: Option<String>,
     pub(super) endpoint_error: Option<String>,
     pub(super) dismissed_product_announcement: Option<(String, String)>,
+    /// The latest snapshot applied as the active one and not yet acknowledged to its
+    /// endpoint: endpoint, boot id and revision.
+    pub(super) unacknowledged_snapshot: Option<(ClientEndpointId, String, u64)>,
 }
 
 pub(super) fn product_announcement_state(
@@ -1042,6 +1045,7 @@ impl ClientShellState {
                 height_px: 1,
             },
             popup_terminal_id: None,
+            unacknowledged_snapshot: None,
             sidebar_collapsed,
             sidebar_collapsed_manual: preferences.sidebar_collapsed.is_some(),
             sidebar_width,
@@ -1506,6 +1510,11 @@ impl ClientShellState {
                 Some(_) => {}
             }
         }
+        self.unacknowledged_snapshot = Some((
+            self.active_endpoint_id.clone(),
+            snapshot.boot_id.clone(),
+            snapshot.revision,
+        ));
         self.snapshot = Some(snapshot);
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {
