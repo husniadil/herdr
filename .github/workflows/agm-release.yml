@@ -7,7 +7,8 @@ name: AGM release
 on:
   push:
     tags:
-      - "v*+agm.*"
+      # `+` repeats the character before it in a filter, so it is escaped.
+      - 'v*\+agm.*'
 
 permissions:
   contents: read
@@ -87,7 +88,7 @@ jobs:
 
       - name: Set Linux aarch64 linker
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
       - name: Remove Zig caches
         shell: bash
