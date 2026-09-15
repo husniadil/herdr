@@ -76,6 +76,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         ssh_agent_registration: false,
         client_view_focus: true,
         client_view_ack: true,
+        client_view_pane: true,
     })
 }
 
@@ -1450,6 +1451,7 @@ mod tests {
                 ssh_agent_registration: false,
                 client_view_focus: true,
                 client_view_ack: true,
+                client_view_pane: true,
             }),
             None,
             None,
@@ -1494,6 +1496,24 @@ mod tests {
 
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed["result"]["capabilities"]["client_view_ack"], true);
+    }
+
+    #[test]
+    fn ping_advertises_client_view_pane() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let response = handle_request(
+            Request {
+                id: "req_view_pane".into(),
+                method: Method::Ping(crate::api::schema::PingParams::default()),
+            },
+            &tx,
+            default_capabilities(),
+            None,
+            None,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["result"]["capabilities"]["client_view_pane"], true);
     }
 
     #[test]

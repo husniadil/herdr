@@ -729,6 +729,7 @@ fn success_response_round_trips() {
                 ssh_agent_registration: false,
                 client_view_focus: false,
                 client_view_ack: false,
+                client_view_pane: false,
             }),
         },
     };
