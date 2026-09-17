@@ -195,6 +195,11 @@ pub enum Method {
     PaneLinkResolve(PaneLinkActivateParams),
     #[serde(rename = "pane.rename")]
     PaneRename(PaneRenameParams),
+    /// Asks the pane's process to redraw by shrinking its PTY one row for a
+    /// moment and restoring it. herdr's own screen is not resized. Needs
+    /// `pane_redraw`.
+    #[serde(rename = "pane.redraw")]
+    PaneRedraw(PaneTarget),
     #[serde(rename = "pane.send_text")]
     PaneSendText(PaneSendTextParams),
     #[serde(rename = "pane.send_keys")]

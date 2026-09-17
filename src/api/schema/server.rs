@@ -40,4 +40,7 @@ pub struct ServerCapabilities {
     /// Whether this server honours `pane_id` in `client.view.focus`.
     #[serde(default)]
     pub client_view_pane: bool,
+    /// Whether this server answers `pane.redraw`.
+    #[serde(default)]
+    pub pane_redraw: bool,
 }

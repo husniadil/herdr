@@ -1141,6 +1141,7 @@ impl App {
                 return self.handle_pane_link_activate(request.id, params);
             }
             Method::PaneRename(params) => return self.handle_pane_rename(request.id, params),
+            Method::PaneRedraw(target) => return self.handle_pane_redraw(request.id, target),
             Method::PaneRead(params) => return self.handle_pane_read(request.id, params),
             Method::PaneGraphicsSet(params) => {
                 return self.handle_pane_graphics_set(request.id, params);
