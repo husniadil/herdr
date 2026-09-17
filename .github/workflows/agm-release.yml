@@ -63,17 +63,9 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install Zig
-        if: runner.os != 'macOS'
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
         with:
-          version: 0.15.2
-
-      - name: Install patched Zig on macOS
-        if: runner.os == 'macOS'
-        run: |
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install zig@0.15
-          echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
-          "$(brew --prefix zig@0.15)/bin/zig" version
+          version: 0.16.0
 
       - name: Install Linux build tools
         if: runner.os == 'Linux'
