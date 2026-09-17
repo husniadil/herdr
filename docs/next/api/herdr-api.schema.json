@@ -6014,6 +6014,23 @@
           "type": "object"
         },
         {
+          "description": "Asks the pane's process to redraw by shrinking its PTY one row for a\nmoment and restoring it. herdr's own screen is not resized. Needs\n`pane_redraw`.",
+          "properties": {
+            "method": {
+              "const": "pane.redraw",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "method": {
               "const": "pane.send_text",
@@ -10821,6 +10838,11 @@
               "type": "boolean"
             },
             "live_handoff": {
+              "type": "boolean"
+            },
+            "pane_redraw": {
+              "default": false,
+              "description": "Whether this server answers `pane.redraw`.",
               "type": "boolean"
             },
             "surface_interest": {

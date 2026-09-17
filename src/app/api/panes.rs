@@ -1460,6 +1460,20 @@ impl App {
         encode_success(id, ResponseResult::Ok {})
     }
 
+    pub(super) fn handle_pane_redraw(&mut self, id: String, target: PaneTarget) -> String {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&target.pane_id) else {
+            return pane_not_found(id, &target.pane_id);
+        };
+        let Some((runtime, _)) = self.lookup_runtime(ws_idx, pane_id) else {
+            return pane_not_found(id, &target.pane_id);
+        };
+        #[cfg(unix)]
+        runtime.nudge_child_redraw_after_handoff();
+        #[cfg(not(unix))]
+        let _ = runtime;
+        encode_success(id, ResponseResult::Ok {})
+    }
+
     pub(super) fn handle_pane_rename(&mut self, id: String, params: PaneRenameParams) -> String {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);

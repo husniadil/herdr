@@ -74,6 +74,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         client_view_focus: true,
         client_view_ack: true,
         client_view_pane: true,
+        pane_redraw: true,
     })
 }
 
@@ -461,6 +462,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PaneInputSet(_) => "pane.input.set",
         Method::PaneLinkActivate(_) => "pane.link.activate",
         Method::PaneRename(_) => "pane.rename",
+        Method::PaneRedraw(_) => "pane.redraw",
         Method::PaneSendText(_) => "pane.send_text",
         Method::PaneSendKeys(_) => "pane.send_keys",
         Method::PaneSendInput(_) => "pane.send_input",
@@ -1158,6 +1160,7 @@ mod tests {
                 client_view_focus: true,
                 client_view_ack: true,
                 client_view_pane: true,
+        pane_redraw: true,
             }),
             None,
             None,
@@ -1202,6 +1205,24 @@ mod tests {
 
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed["result"]["capabilities"]["client_view_ack"], true);
+    }
+
+    #[test]
+    fn ping_advertises_pane_redraw() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let response = handle_request(
+            Request {
+                id: "req_pane_redraw".into(),
+                method: Method::Ping(crate::api::schema::PingParams::default()),
+            },
+            &tx,
+            default_capabilities(),
+            None,
+            None,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["result"]["capabilities"]["pane_redraw"], true);
     }
 
     #[test]
