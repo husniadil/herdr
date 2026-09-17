@@ -194,6 +194,9 @@ impl HeadlessServer {
         }
     }
 
+    /// Moves every untagged shell client onto the server's focus. A client started
+    /// with a tag is moved only by `client.view.focus`: its caller owns its view,
+    /// and a public focus request from anyone else must not take it away.
     pub(super) fn focus_all_shell_clients_on_default_target(&mut self) {
         let Some(target) = self.default_shell_target() else {
             return;
@@ -207,7 +210,7 @@ impl HeadlessServer {
         for client in self
             .clients
             .values_mut()
-            .filter(|client| client.is_shell_client())
+            .filter(|client| client.is_shell_client() && client.client_tag.is_none())
         {
             if let Some(location) = client.shell_location.as_mut() {
                 location.focus_tab(workspace_id.clone(), tab_id.clone());
