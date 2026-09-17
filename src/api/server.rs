@@ -78,7 +78,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         client_view_focus: true,
         client_view_ack: true,
         client_view_pane: true,
-        pane_redraw: true,
+        pane_redraw: cfg!(unix),
     })
 }
 
@@ -1511,7 +1511,7 @@ mod tests {
                 client_view_focus: true,
                 client_view_ack: true,
                 client_view_pane: true,
-        pane_redraw: true,
+                pane_redraw: cfg!(unix),
             }),
             None,
             None,
@@ -1574,7 +1574,7 @@ mod tests {
         );
 
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
-        assert_eq!(parsed["result"]["capabilities"]["pane_redraw"], true);
+        assert_eq!(parsed["result"]["capabilities"]["pane_redraw"], cfg!(unix));
     }
 
     #[test]
