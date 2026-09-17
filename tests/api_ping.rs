@@ -144,6 +144,9 @@ fn spawn_herdr_with_options(
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    // A pane's login shell reads the profile under HOME, and a real one can
+    // put its own agents ahead of the fake one PATH names.
+    cmd.env("HOME", config_home);
     cmd.env("HERDR_SOCKET_PATH", socket_path);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", shell);

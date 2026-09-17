@@ -81,6 +81,9 @@ fn spawn_server_with_env(
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    // A pane's login shell reads the profile under HOME, and a real one can
+    // put its own agents ahead of the fake one PATH names.
+    cmd.env("HOME", config_home);
     cmd.env("HERDR_SOCKET_PATH", api_socket);
     cmd.env(
         "HERDR_CLIENT_SOCKET_PATH",
