@@ -72,6 +72,9 @@ pub struct Version {
 impl Version {
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.strip_prefix('v').unwrap_or(s);
+        // Build metadata has no bearing on precedence, and a build that carries
+        // it (`0.9.1+agm.1`) is the release it was built from.
+        let s = s.split_once('+').map_or(s, |(version, _)| version);
         let parts: Vec<&str> = s.split('.').collect();
         if parts.len() != 3 {
             return None;
@@ -2724,8 +2727,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_version_ignores_build_metadata() {
+        assert_eq!(
+            Version::parse("v0.9.1+agm.1"),
+            Some(Version {
+                major: 0,
+                minor: 9,
+                patch: 1
+            })
+        );
+        assert!(Version::parse(crate::build_info::BASE_VERSION).is_some());
+    }
+
+    #[test]
     fn parse_version_invalid() {
         assert_eq!(Version::parse("1.2"), None);
+        assert_eq!(Version::parse("1.2+agm.1"), None);
         assert_eq!(Version::parse("abc"), None);
         assert_eq!(Version::parse(""), None);
     }
