@@ -730,6 +730,7 @@ fn success_response_round_trips() {
                 client_view_focus: false,
                 client_view_ack: false,
                 client_view_pane: false,
+                pane_redraw: false,
             }),
         },
     };
