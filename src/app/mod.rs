@@ -2420,6 +2420,20 @@ mod tests {
     }
 
     #[test]
+    fn pane_redraw_request_refuses_an_unknown_pane() {
+        let mut app = test_app();
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_pane_redraw".into(),
+            method: crate::api::schema::Method::PaneRedraw(crate::api::schema::PaneTarget {
+                pane_id: "w9:p9".into(),
+            }),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(response["error"]["code"], "pane_not_found");
+    }
+
+    #[test]
     fn pane_rename_request_sets_and_clears_manual_label() {
         let mut app = test_app();
         let workspace = Workspace::test_new("api-pane-rename");
