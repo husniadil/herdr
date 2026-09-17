@@ -1483,6 +1483,43 @@ impl App {
         encode_success(id, ResponseResult::Ok {})
     }
 
+    #[cfg(unix)]
+    pub(super) fn handle_pane_redraw(&mut self, id: String, target: PaneTarget) -> String {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&target.pane_id) else {
+            return pane_not_found(id, &target.pane_id);
+        };
+        let Some((runtime, _)) = self.lookup_runtime(ws_idx, pane_id) else {
+            return pane_not_found(id, &target.pane_id);
+        };
+        runtime.nudge_child_redraw_after_handoff();
+        encode_success(id, ResponseResult::Ok {})
+    }
+
+    /// Without a Unix PTY actor there is nothing to nudge, so the server does not
+    /// advertise `pane_redraw` and refuses a known pane's redraw rather than
+    /// answer ok for one that never happens. An unknown pane is still
+    /// `pane_not_found`, as on Unix.
+    #[cfg(not(unix))]
+    pub(super) fn handle_pane_redraw(&mut self, id: String, target: PaneTarget) -> String {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&target.pane_id) else {
+            return pane_not_found(id, &target.pane_id);
+        };
+        if self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|workspace| workspace.pane_state(pane_id))
+            .is_none()
+        {
+            return pane_not_found(id, &target.pane_id);
+        }
+        encode_error(
+            id,
+            "platform_unsupported",
+            "pane.redraw is not supported on this platform",
+        )
+    }
+
     pub(super) fn handle_pane_rename(&mut self, id: String, params: PaneRenameParams) -> String {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);

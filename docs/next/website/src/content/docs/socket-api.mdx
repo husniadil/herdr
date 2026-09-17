@@ -103,7 +103,7 @@ Raw socket method names use dot notation:
 | Workspace | `workspace.create`, `workspace.list`, `workspace.get`, `workspace.focus`, `workspace.rename`, `workspace.move`, `workspace.move_block`, `workspace.report_metadata`, `workspace.close` |
 | Worktree | `worktree.list`, `worktree.create`, `worktree.open`, `worktree.remove` |
 | Tab | `tab.create`, `tab.list`, `tab.get`, `tab.focus`, `tab.rename`, `tab.move`, `tab.close` |
-| Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
+| Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.redraw`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
 | Popup | `popup.close` |
 | Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
 | Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
@@ -163,6 +163,20 @@ when the application requests terminal mouse reporting; otherwise Herdr falls
 back to its pane menu. Right-clicking the pane frame always opens Herdr's menu.
 `pane.split` accepts the same optional `right_click` value for the newly created
 pane.
+
+`pane.redraw` asks the process in one pane to draw its screen again, without
+typing into the pane or changing the layout. Herdr shrinks the pane's PTY by one
+row and restores it once the process has written output, or after half a second
+if it writes none, so the process sees a real size change. Herdr's own screen is
+not resized. The response is `ok` once the change is queued, not once the
+process has drawn; read the pane afterwards to see the result. A server that
+supports it reports `capabilities.pane_redraw: true` from `ping`, which only a
+Unix server does. Elsewhere the request is refused with `platform_unsupported`.
+
+```json
+{"id":"req_redraw","method":"pane.redraw","params":{"pane_id":"w1:p1"}}
+{"id":"req_redraw","result":{"type":"ok"}}
+```
 
 `PaneInfo` includes `scroll` when terminal scroll metrics are available:
 
