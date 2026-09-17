@@ -237,6 +237,40 @@ async fn client_view_focus_moves_only_the_addressed_client() {
 }
 
 #[tokio::test]
+async fn public_focus_moves_untagged_clients_and_leaves_tagged_ones() {
+    let (mut server, workspace_ids, tab_ids) = two_workspace_server();
+    let untagged = connect_shell_with_view(&mut server, 7, None, None);
+    let tagged = connect_shell_with_view(&mut server, 8, None, Some("b"));
+    let _ = first_snapshot(&untagged);
+    let _ = first_snapshot(&tagged);
+
+    let response = call_api(
+        &mut server,
+        api::schema::Method::WorkspaceFocus(api::schema::WorkspaceTarget {
+            workspace_id: workspace_ids[1].clone(),
+        }),
+    );
+
+    assert!(response.get("error").is_none(), "{response}");
+    assert_eq!(server.app.state.active, Some(1));
+    assert_eq!(
+        server.shell_tab_id_for_client(7).as_deref(),
+        Some(tab_ids[1].as_str())
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(8).as_deref(),
+        Some(tab_ids[0].as_str())
+    );
+
+    let response = call_api(
+        &mut server,
+        focus_params(None, Some("b"), &workspace_ids[1], Some(&tab_ids[2])),
+    );
+    assert_eq!(response["result"]["client"]["tab_id"], tab_ids[2].as_str());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn client_view_focus_on_a_pane_focuses_it_in_its_tab_for_that_client() {
     let mut server = test_headless_server();
     let first = crate::workspace::Workspace::test_new("first");

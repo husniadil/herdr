@@ -402,7 +402,10 @@ A client can be started on a workspace and labelled for these methods with
 start workspace applies only to that client; an id that names no workspace falls
 back to the server's focus. A tag is 1 to 128 bytes without control characters,
 and a server rejects the connection with `invalid_client_tag` otherwise. Tags are
-not required to be unique.
+not required to be unique. A tagged client is moved only by `client.view.focus`: a
+request that moves the server's focus (`workspace.focus`, `tab.focus`, `pane.focus`,
+`agent.focus`, or a create, pane move or worktree open with `focus`) moves every
+untagged client and leaves tagged ones where they are.
 
 List connected clients, in `client_id` order:
 
