@@ -56,6 +56,13 @@ struct PtyResizeRequest {
     terminal_responses: Vec<Bytes>,
 }
 
+/// The size a nudge puts back. A resize taken in the same pass was asked for
+/// no earlier than the nudge, so its size is the current one, and restoring
+/// the size the nudge carried would undo it.
+fn nudge_restores(resized: Option<PtyResize>, nudge: PtyResize) -> PtyResize {
+    resized.unwrap_or(nudge)
+}
+
 #[derive(Default)]
 struct SharedPtyControls {
     resize: Option<PtyResizeRequest>,
@@ -803,12 +810,13 @@ impl PtyIoActorRunner {
         if self.state == ActorState::Released {
             return;
         }
+        let resized = resize.as_ref().map(|request| request.resize);
         if let Some(request) = resize {
             self.resize(request.resize);
             self.enqueue_terminal_responses(request.terminal_responses);
         }
         if let Some(nudge) = nudge {
-            self.nudge(nudge);
+            self.nudge(nudge_restores(resized, nudge));
         }
         self.enqueue_terminal_responses(terminal_responses);
     }
@@ -1598,6 +1606,24 @@ mod tests {
             .expect("actor still reads after duplicate closes");
         assert_eq!(read, Bytes::from_static(b"still-live"));
         handle.shutdown();
+    }
+
+    #[test]
+    fn a_nudge_restores_a_resize_taken_in_the_same_pass() {
+        let old = PtyResize {
+            rows: 40,
+            cols: 120,
+            cell_width_px: 9,
+            cell_height_px: 18,
+        };
+        let new = PtyResize {
+            rows: 30,
+            cols: 100,
+            cell_width_px: 9,
+            cell_height_px: 18,
+        };
+        assert_eq!(nudge_restores(Some(new), old), new);
+        assert_eq!(nudge_restores(None, old), old);
     }
 
     #[test]
