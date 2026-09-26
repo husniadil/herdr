@@ -827,7 +827,7 @@ impl HeadlessServer {
         }
         let known = self.app.state.host_terminal_theme;
         self.app
-            .set_host_terminal_theme(host_terminal_theme.or_default_colors_of(known));
+            .set_host_terminal_theme(host_terminal_theme.with_default_colors_or(known));
     }
 
     fn sync_visible_server_config_diagnostic(&mut self, uses_local_keybindings: bool) {
@@ -2291,10 +2291,9 @@ impl HeadlessServer {
                 if !client.shell_surface_active || self.foreground_client_id != Some(client_id) {
                     return false;
                 }
-                // The answers arrive one update at a time, and one that is not a
-                // default colour applied the client's empty ones in the same
-                // way, so each keeps what the client has not reported yet, as a
-                // promotion does.
+                // The answers arrive one update at a time, so the default
+                // colours stay as they were until the client has reported both,
+                // as on a promotion.
                 let mut changed = client.host_terminal_appearance.is_some()
                     && self.app.set_host_terminal_appearance_state(
                         client.host_terminal_appearance,
@@ -2302,7 +2301,7 @@ impl HeadlessServer {
                     );
                 let known = self.app.state.host_terminal_theme;
                 changed |= self.app.set_host_terminal_theme(
-                    client.host_terminal_theme.or_default_colors_of(known),
+                    client.host_terminal_theme.with_default_colors_or(known),
                 );
                 if changed {
                     self.resize_shared_runtime_to_effective_size_before_input();

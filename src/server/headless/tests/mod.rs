@@ -3841,6 +3841,18 @@ fn client_shell_host_theme_follows_foreground_client() {
         g: 20,
         b: 200,
     };
+    // The default colours are applied as a pair, once both are reported.
+    server.handle_server_event(ServerEvent::ClientShellHostTheme {
+        client_id: 1,
+        update: protocol::ClientHostThemeUpdate::DefaultColor {
+            kind: protocol::ClientHostDefaultColorKind::Foreground,
+            color: protocol::ClientHostColor {
+                r: 220,
+                g: 220,
+                b: 220,
+            },
+        },
+    });
     assert!(
         server.handle_server_event(ServerEvent::ClientShellHostTheme {
             client_id: 1,
@@ -3888,6 +3900,19 @@ fn client_shell_host_theme_follows_foreground_client() {
             },
         })
     );
+    assert!(
+        !server.handle_server_event(ServerEvent::ClientShellHostTheme {
+            client_id: 2,
+            update: protocol::ClientHostThemeUpdate::DefaultColor {
+                kind: protocol::ClientHostDefaultColorKind::Foreground,
+                color: protocol::ClientHostColor {
+                    r: 30,
+                    g: 30,
+                    b: 30,
+                },
+            },
+        })
+    );
     assert_eq!(
         server.app.state.host_terminal_theme.background,
         Some(dark.into())
@@ -3922,19 +3947,18 @@ fn client_shell_host_theme_is_kept_until_a_new_foreground_client_answers() {
         );
     }
     server.foreground_client_id = Some(1);
-    let dark = protocol::ClientHostColor {
-        r: 26,
-        g: 24,
-        b: 23,
+    let color = |r, g, b| protocol::ClientHostColor { r, g, b };
+    let default_color = |client_id, kind, color| ServerEvent::ClientShellHostTheme {
+        client_id,
+        update: protocol::ClientHostThemeUpdate::DefaultColor { kind, color },
     };
-    assert!(
-        server.handle_server_event(ServerEvent::ClientShellHostTheme {
-            client_id: 1,
-            update: protocol::ClientHostThemeUpdate::DefaultColor {
-                kind: protocol::ClientHostDefaultColorKind::Background,
-                color: dark,
-            },
-        })
+    use protocol::ClientHostDefaultColorKind::{Background, Foreground};
+    let (dark_fg, dark) = (color(232, 230, 227), color(26, 24, 23));
+    server.handle_server_event(default_color(1, Foreground, dark_fg));
+    server.handle_server_event(default_color(1, Background, dark));
+    assert_eq!(
+        server.app.state.host_terminal_theme.background,
+        Some(dark.into())
     );
 
     // Client 2 is promoted as it connects, before its terminal has answered.
@@ -3949,12 +3973,9 @@ fn client_shell_host_theme_is_kept_until_a_new_foreground_client_answers() {
         Some(crate::terminal_theme::HostAppearance::Dark)
     );
 
-    // Its answers that are not a default colour arrive first.
-    let blue = protocol::ClientHostColor {
-        r: 10,
-        g: 20,
-        b: 200,
-    };
+    // Its answers that are not a default colour arrive first, then one default
+    // colour without the other, and the pair it had stays.
+    let blue = color(10, 20, 200);
     server.handle_server_event(ServerEvent::ClientShellHostTheme {
         client_id: 2,
         update: protocol::ClientHostThemeUpdate::PaletteColors(vec![(4, blue)]),
@@ -3963,28 +3984,25 @@ fn client_shell_host_theme_is_kept_until_a_new_foreground_client_answers() {
         client_id: 2,
         update: protocol::ClientHostThemeUpdate::Appearance(protocol::ClientHostAppearance::Light),
     });
-    assert_eq!(
-        server.app.state.host_terminal_theme.background,
-        Some(dark.into())
-    );
+    let (light_fg, light) = (color(31, 29, 27), color(250, 249, 247));
+    server.handle_server_event(default_color(2, Background, light));
     assert_eq!(
         server.app.state.host_terminal_theme.palette[4],
         Some(blue.into())
     );
+    assert_eq!(
+        server.app.state.host_terminal_theme.foreground,
+        Some(dark_fg.into())
+    );
+    assert_eq!(
+        server.app.state.host_terminal_theme.background,
+        Some(dark.into())
+    );
 
-    let light = protocol::ClientHostColor {
-        r: 250,
-        g: 249,
-        b: 247,
-    };
-    assert!(
-        server.handle_server_event(ServerEvent::ClientShellHostTheme {
-            client_id: 2,
-            update: protocol::ClientHostThemeUpdate::DefaultColor {
-                kind: protocol::ClientHostDefaultColorKind::Background,
-                color: light,
-            },
-        })
+    assert!(server.handle_server_event(default_color(2, Foreground, light_fg)));
+    assert_eq!(
+        server.app.state.host_terminal_theme.foreground,
+        Some(light_fg.into())
     );
     assert_eq!(
         server.app.state.host_terminal_theme.background,

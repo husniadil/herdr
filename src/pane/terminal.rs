@@ -6506,6 +6506,49 @@ mod tests {
     }
 
     #[test]
+    fn render_state_follows_host_default_colors_only_as_a_pair() {
+        let fg = crate::terminal_theme::RgbColor {
+            r: 31,
+            g: 29,
+            b: 27,
+        };
+        let bg = crate::terminal_theme::RgbColor {
+            r: 250,
+            g: 249,
+            b: 247,
+        };
+        let rendered = |foreground, background| {
+            let (tx, _rx) = mpsc::channel(4);
+            let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+            let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+            pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+                foreground,
+                background,
+                ..Default::default()
+            });
+            let mut core = pane.core.lock().unwrap();
+            let GhosttyPaneCore {
+                terminal,
+                render_state,
+                ..
+            } = &mut *core;
+            render_state.update(terminal).unwrap();
+            let colors = render_state.colors().unwrap();
+            (
+                terminal_theme_color(colors.foreground),
+                terminal_theme_color(colors.background),
+            )
+        };
+
+        // With one of the two unset, the render state keeps both at their
+        // defaults, so the server applies them only as a pair
+        // (TerminalTheme::with_default_colors_or).
+        assert_ne!(rendered(Some(fg), None).0, fg);
+        assert_ne!(rendered(None, Some(bg)).1, bg);
+        assert_eq!(rendered(Some(fg), Some(bg)), (fg, bg));
+    }
+
+    #[test]
     fn process_pty_bytes_orders_xtgettcap_reply_before_following_default_color_reply() {
         let (tx, mut rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
