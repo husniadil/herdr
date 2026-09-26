@@ -503,6 +503,8 @@ async fn run_client_loop(
                 &endpoint::ClientEndpointId::Local,
                 endpoint::ClientEndpointStatus::Connecting,
             );
+        } else if view.workspace_id.is_some() {
+            shell.await_requested_surface();
         }
     }
     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));

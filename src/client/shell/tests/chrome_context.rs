@@ -523,3 +523,34 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_group_close(
             if params.workspace_id == "ws_1" && params.close_group
     ));
 }
+
+#[test]
+fn client_launched_onto_a_workspace_draws_nothing_before_its_first_surface() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Online);
+    state.await_requested_surface();
+    state.set_snapshot(Box::new(snapshot()));
+    assert!(state.compose(106, 30).is_none());
+
+    state.set_pane_surface(surface());
+    assert!(state.compose(106, 30).is_some());
+
+    // Once the workspace has been shown, losing its surface draws the chrome again.
+    state.reset_endpoint_projection();
+    let waiting = state
+        .compose(106, 30)
+        .expect("chrome while the surface is gone");
+    assert!(!waiting.cells.is_empty());
+}
+
+#[test]
+fn client_launched_onto_a_workspace_still_shows_a_connection_that_is_not_online() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Reconnecting);
+    state.await_requested_surface();
+    assert!(state.compose(106, 30).is_some());
+
+    state.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Online);
+    state.set_endpoint_error("the workspace is gone");
+    assert!(state.compose(106, 30).is_some());
+}
