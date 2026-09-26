@@ -78,11 +78,16 @@ impl TerminalTheme {
         self.foreground.is_none() && self.background.is_none()
     }
 
-    /// This theme, with a default colour it has not had reported yet taken
-    /// from `known`.
-    pub fn or_default_colors_of(mut self, known: Self) -> Self {
-        self.foreground = self.foreground.or(known.foreground);
-        self.background = self.background.or(known.background);
+    /// This theme, with its default colours taken from `known` until both have
+    /// been reported. A pane is given the two as a pair: libghostty's render
+    /// state follows neither while one of them is unset, so a foreground alone
+    /// went out as explicit white text and a background alone as explicit
+    /// black.
+    pub fn with_default_colors_or(mut self, known: Self) -> Self {
+        if self.foreground.is_none() || self.background.is_none() {
+            self.foreground = known.foreground;
+            self.background = known.background;
+        }
         self
     }
 }
