@@ -149,6 +149,11 @@ pub(crate) struct ClientConnection {
     pub(crate) pixel_mouse: bool,
     /// Last host terminal default colors reported by this client.
     pub(crate) host_terminal_theme: crate::terminal_theme::TerminalTheme,
+    /// When this connection was accepted, which is when its terminal was asked for
+    /// its colours.
+    pub(crate) connected_at: std::time::Instant,
+    /// Whether the end of this client's grace for reporting its colours was applied.
+    pub(crate) host_theme_grace_applied: bool,
     /// Last host light/dark appearance reported by this client.
     pub(crate) host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
     /// Whether appearance came from an explicit host color-scheme report.
@@ -242,6 +247,8 @@ impl ClientConnection {
             direct_graphics: false,
             pixel_mouse: false,
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
+            connected_at: std::time::Instant::now(),
+            host_theme_grace_applied: false,
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
             outer_terminal_focus: None,

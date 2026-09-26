@@ -77,6 +77,19 @@ impl TerminalTheme {
     pub fn is_empty(self) -> bool {
         self.foreground.is_none() && self.background.is_none()
     }
+
+    /// This theme, with its default colours taken from `known` until both have
+    /// been reported. A pane is given the two as a pair: libghostty's render
+    /// state follows neither while one of them is unset, so a foreground alone
+    /// went out as explicit white text and a background alone as explicit
+    /// black.
+    pub fn with_default_colors_or(mut self, known: Self) -> Self {
+        if self.foreground.is_none() || self.background.is_none() {
+            self.foreground = known.foreground;
+            self.background = known.background;
+        }
+        self
+    }
 }
 
 pub fn host_terminal_theme_query_sequence(include_palette: bool) -> String {
