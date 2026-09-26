@@ -3907,6 +3907,96 @@ fn client_shell_host_theme_follows_foreground_client() {
 }
 
 #[test]
+fn client_shell_host_theme_is_kept_until_a_new_foreground_client_answers() {
+    let mut server = test_headless_server();
+    for id in [1, 2] {
+        server.clients.insert(
+            id,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                id,
+                RenderEncoding::SemanticFrame,
+                None,
+            ),
+        );
+    }
+    server.foreground_client_id = Some(1);
+    let dark = protocol::ClientHostColor {
+        r: 26,
+        g: 24,
+        b: 23,
+    };
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellHostTheme {
+            client_id: 1,
+            update: protocol::ClientHostThemeUpdate::DefaultColor {
+                kind: protocol::ClientHostDefaultColorKind::Background,
+                color: dark,
+            },
+        })
+    );
+
+    // Client 2 is promoted as it connects, before its terminal has answered.
+    server.foreground_client_id = Some(2);
+    server.sync_foreground_client_state();
+    assert_eq!(
+        server.app.state.host_terminal_theme.background,
+        Some(dark.into())
+    );
+    assert_eq!(
+        server.app.state.host_terminal_appearance,
+        Some(crate::terminal_theme::HostAppearance::Dark)
+    );
+
+    // Its answers that are not a default colour arrive first.
+    let blue = protocol::ClientHostColor {
+        r: 10,
+        g: 20,
+        b: 200,
+    };
+    server.handle_server_event(ServerEvent::ClientShellHostTheme {
+        client_id: 2,
+        update: protocol::ClientHostThemeUpdate::PaletteColors(vec![(4, blue)]),
+    });
+    server.handle_server_event(ServerEvent::ClientShellHostTheme {
+        client_id: 2,
+        update: protocol::ClientHostThemeUpdate::Appearance(protocol::ClientHostAppearance::Light),
+    });
+    assert_eq!(
+        server.app.state.host_terminal_theme.background,
+        Some(dark.into())
+    );
+    assert_eq!(
+        server.app.state.host_terminal_theme.palette[4],
+        Some(blue.into())
+    );
+
+    let light = protocol::ClientHostColor {
+        r: 250,
+        g: 249,
+        b: 247,
+    };
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellHostTheme {
+            client_id: 2,
+            update: protocol::ClientHostThemeUpdate::DefaultColor {
+                kind: protocol::ClientHostDefaultColorKind::Background,
+                color: light,
+            },
+        })
+    );
+    assert_eq!(
+        server.app.state.host_terminal_theme.background,
+        Some(light.into())
+    );
+    assert_eq!(
+        server.app.state.host_terminal_appearance,
+        Some(crate::terminal_theme::HostAppearance::Light)
+    );
+}
+
+#[test]
 fn terminal_clients_store_known_cell_geometry_independently_of_pixel_mouse() {
     let mut server = test_headless_server();
 

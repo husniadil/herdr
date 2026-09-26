@@ -814,11 +814,20 @@ impl HeadlessServer {
         if outer_terminal_focus == Some(true) {
             self.app.state.mark_active_tab_seen();
         }
-        self.app.set_host_terminal_appearance_state(
-            host_terminal_appearance,
-            host_terminal_appearance_explicit,
-        );
-        self.app.set_host_terminal_theme(host_terminal_theme);
+        // A client promoted as it connects has not answered its terminal's
+        // colour queries yet. Its empty theme left each pane's default colours
+        // at the previous client's and marked them explicit, so the new client
+        // painted every blank cell in the other client's background until its
+        // answer arrived. What it has not reported stays as it was until then.
+        if host_terminal_appearance.is_some() {
+            self.app.set_host_terminal_appearance_state(
+                host_terminal_appearance,
+                host_terminal_appearance_explicit,
+            );
+        }
+        let known = self.app.state.host_terminal_theme;
+        self.app
+            .set_host_terminal_theme(host_terminal_theme.or_default_colors_of(known));
     }
 
     fn sync_visible_server_config_diagnostic(&mut self, uses_local_keybindings: bool) {
@@ -2282,11 +2291,19 @@ impl HeadlessServer {
                 if !client.shell_surface_active || self.foreground_client_id != Some(client_id) {
                     return false;
                 }
-                let mut changed = self.app.set_host_terminal_appearance_state(
-                    client.host_terminal_appearance,
-                    client.host_terminal_appearance_explicit,
+                // The answers arrive one update at a time, and one that is not a
+                // default colour applied the client's empty ones in the same
+                // way, so each keeps what the client has not reported yet, as a
+                // promotion does.
+                let mut changed = client.host_terminal_appearance.is_some()
+                    && self.app.set_host_terminal_appearance_state(
+                        client.host_terminal_appearance,
+                        client.host_terminal_appearance_explicit,
+                    );
+                let known = self.app.state.host_terminal_theme;
+                changed |= self.app.set_host_terminal_theme(
+                    client.host_terminal_theme.or_default_colors_of(known),
                 );
-                changed |= self.app.set_host_terminal_theme(client.host_terminal_theme);
                 if changed {
                     self.resize_shared_runtime_to_effective_size_before_input();
                 }

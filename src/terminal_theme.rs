@@ -77,6 +77,14 @@ impl TerminalTheme {
     pub fn is_empty(self) -> bool {
         self.foreground.is_none() && self.background.is_none()
     }
+
+    /// This theme, with a default colour it has not had reported yet taken
+    /// from `known`.
+    pub fn or_default_colors_of(mut self, known: Self) -> Self {
+        self.foreground = self.foreground.or(known.foreground);
+        self.background = self.background.or(known.background);
+        self
+    }
 }
 
 pub fn host_terminal_theme_query_sequence(include_palette: bool) -> String {
