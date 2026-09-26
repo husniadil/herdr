@@ -843,6 +843,9 @@ pub(crate) struct ClientShellState {
     /// A future projection surface waits here until its matching snapshot arrives. The visible
     /// pane surface always remains an exact snapshot pair.
     pub(super) pending_pane_surface: Option<PaneSurfaceFrame>,
+    /// A client launched onto one workspace, connected, whose first surface has not arrived.
+    /// The chrome drawn while there is no surface is held back until it does.
+    pub(super) awaiting_requested_surface: bool,
     pub(super) graphics: crate::kitty_graphics::surface::ClientState,
     pub(super) graphics_cell_size: crate::kitty_graphics::HostCellSize,
     pub(super) popup_terminal_id: Option<String>,
@@ -1005,6 +1008,7 @@ impl ClientShellState {
             pane_surface_generation: None,
             pane_surface: None,
             pending_pane_surface: None,
+            awaiting_requested_surface: false,
             graphics: crate::kitty_graphics::surface::ClientState::default(),
             graphics_cell_size: crate::kitty_graphics::HostCellSize {
                 width_px: 1,
@@ -1577,6 +1581,12 @@ impl ClientShellState {
         self.pane_surface.is_some()
     }
 
+    /// For a client launched onto one workspace (`--workspace`) that connected: its first
+    /// surface follows within moments, so nothing is drawn before it.
+    pub(crate) fn await_requested_surface(&mut self) {
+        self.awaiting_requested_surface = true;
+    }
+
     pub(crate) fn set_pane_surface(&mut self, surface: PaneSurfaceFrame) {
         let Some(snapshot) = self.snapshot.as_ref() else {
             return;
@@ -1771,6 +1781,7 @@ impl ClientShellState {
             .set_scene(std::mem::take(&mut surface.graphics));
         self.pane_surface = Some(surface);
         self.pane_surface_generation = self.active_snapshot_generation;
+        self.awaiting_requested_surface = false;
         self.invalidate_link_hover();
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();

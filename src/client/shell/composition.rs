@@ -144,6 +144,16 @@ impl ClientShellState {
                 .as_ref()
                 .is_some_and(|target| self.navigation_target_valid(target));
         if self.snapshot.is_none() || self.pane_surface.is_none() {
+            // The machine list drawn here stood for one frame, in the default palette before
+            // the host's appearance was known, ahead of the workspace the client was launched
+            // onto. It is still drawn for a connection that is not online or has failed.
+            if self.awaiting_requested_surface
+                && self.endpoint_error.is_none()
+                && self.endpoint_status(&self.active_endpoint_id)
+                    == Some(ClientEndpointStatus::Online)
+            {
+                return None;
+            }
             return Some(self.compose_unavailable(cols, rows));
         }
         let snapshot = self.snapshot.as_deref()?;
