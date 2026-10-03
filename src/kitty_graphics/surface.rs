@@ -303,6 +303,7 @@ impl ClientState {
         self.host
             .images
             .insert(image_id, image_signature_from_asset(key));
+        self.host.uploaded_sizes.remove(&image_id);
         self.refresh_display_scene();
         if self
             .scene
@@ -334,12 +335,7 @@ impl ClientState {
         self.forced_delete_images.sort_unstable();
         self.forced_delete_images.dedup();
         for image_id in self.forced_delete_images.drain(..) {
-            self.host.images.remove(&image_id);
-            self.host.placements.retain(|(id, _), _| *id != image_id);
-            self.host.sources.retain(|_, id| *id != image_id);
-            self.host
-                .replayed_placements
-                .retain(|(id, _)| *id != image_id);
+            self.host.forget_image(image_id);
             super::encode_delete_image(&mut bytes, image_id);
         }
         bytes
@@ -489,14 +485,10 @@ impl ClientState {
         self.stale_images.sort_unstable();
         self.stale_images.dedup();
         for image_id in self.stale_images.drain(..) {
-            if self.host.images.remove(&image_id).is_some() {
+            if self.host.images.contains_key(&image_id) {
                 super::encode_delete_image(&mut bytes, image_id);
             }
-            self.host.placements.retain(|(id, _), _| *id != image_id);
-            self.host.sources.retain(|_, id| *id != image_id);
-            self.host
-                .replayed_placements
-                .retain(|(id, _)| *id != image_id);
+            self.host.forget_image(image_id);
         }
         if !cell_size.is_known() || self.scope.is_empty() {
             bytes.extend(self.host.clear_bytes());
