@@ -23,6 +23,19 @@ const KITTY_CHUNK_BYTES: usize = 3072;
 pub(crate) const HEADLESS_GRAPHICS_TRANSACTION_BUDGET: usize =
     crate::protocol::MAX_GRAPHICS_FRAME_SIZE - crate::protocol::MAX_FRAME_SIZE;
 const HOST_IMAGE_ID_BASE: u32 = 10_000;
+/// Source pixels an upload keeps per pixel its placements are drawn at, unless the
+/// client was started with `HOST_IMAGE_OVERSAMPLE_ENV`. Above one because a
+/// terminal may report its cell size in CSS pixels (xterm.js does) and draw on a
+/// screen of two or three device pixels to each.
+const HOST_IMAGE_OVERSAMPLE: f64 = 2.0;
+/// Sets that share for one client process, from 0.25 to 4. Whoever starts the
+/// client knows the screen it draws to and the link it goes over, and herdr does
+/// not: a page on a phone takes 1, a quarter of the pixels of the default.
+const HOST_IMAGE_OVERSAMPLE_ENV: &str = "HERDR_KITTY_IMAGE_OVERSAMPLE";
+/// An RGB or RGBA image whose placements need less than this share of its width
+/// is uploaded scaled down, as PNG. A full-size screenshot shown as a thumbnail
+/// was sent whole, about 9.6 MB of base64 for 1734x1040, on every upload.
+const HOST_IMAGE_SCALE_BELOW: f64 = 0.75;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HostCellSize {
@@ -108,6 +121,9 @@ pub(crate) struct HostGraphicsCache {
     sources: HashMap<HostSourceKey, u32>,
     replay_placements: bool,
     replayed_placements: HashSet<(u32, u32)>,
+    /// Width and height of a host image uploaded scaled down; absent for one sent
+    /// at its own size. Placements of a scaled image address its pixels in this size.
+    pub(crate) uploaded_sizes: HashMap<u32, (u32, u32)>,
 }
 
 static KITTY_GRAPHICS_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -129,18 +145,54 @@ pub(crate) fn image_transfer_estimated_size(data_len: usize) -> usize {
 fn encode_placement_update(
     cache: &mut HostGraphicsCache,
     placement: &HostPlacement,
+    scaled_size: Option<(u32, u32)>,
 ) -> Option<GraphicsOutput> {
     let (clipped, format_code) = clipped_placement(placement)?;
-    let host_id = placement
-        .host_image_id
-        .unwrap_or_else(|| host_image_id(placement.pane_id, &placement.placement));
+    let host_id = placement_host_id(placement);
     let placement_id = host_placement_id(&placement.source_key, &placement.placement);
     let key = (host_id, placement_id);
     let image_signature = image_signature(placement, format_code);
+    // An image sent at its own size serves any placement. One sent scaled serves
+    // a placement that needs no more pixels than it has.
+    let uploaded_size = cache.uploaded_sizes.get(&host_id).copied();
+    let resolution_current = match (uploaded_size, scaled_size) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some((width, height)), Some((want_width, want_height))) => {
+            width >= want_width && height >= want_height
+        }
+    };
+    let image_current = cache.images.get(&host_id) == Some(&image_signature) && resolution_current;
+    let source = placement
+        .raw_data
+        .as_deref()
+        .unwrap_or(&placement.placement.data);
+    // What an upload now sends: the scaled PNG where one is wanted and can be made,
+    // else the image at its own size. Placements address the pixels actually sent.
+    let scaled = if image_current || source.is_empty() {
+        None
+    } else {
+        scaled_size.and_then(|(width, height)| {
+            scaled_png(source, &placement.placement, format_code, width, height)
+                .map(|png| (png, (width, height)))
+        })
+    };
+    let sent_size = if image_current {
+        uploaded_size
+    } else {
+        scaled.as_ref().map(|(_, size)| *size)
+    };
+    let clipped = scale_clipped(
+        clipped,
+        sent_size,
+        placement.placement.image_width,
+        placement.placement.image_height,
+    );
     let placement_signature =
         placement_signature(clipped, placement.placement.z, placement.scrollback_offset);
-    let image_current = cache.images.get(&host_id) == Some(&image_signature);
-    let placement_current = cache.placements.get(&key) == Some(&placement_signature)
+    // An upload deletes the image's old placements, so it is always placed again.
+    let placement_current = image_current
+        && cache.placements.get(&key) == Some(&placement_signature)
         && (!cache.replay_placements || cache.replayed_placements.contains(&key));
     if image_current
         && placement_current
@@ -153,12 +205,7 @@ fn encode_placement_update(
     let mut output = GraphicsOutput::default();
     if !image_current {
         // Bail out before touching the cache so a pending upload keeps the old image.
-        if placement
-            .raw_data
-            .as_deref()
-            .unwrap_or(&placement.placement.data)
-            .is_empty()
-        {
+        if source.is_empty() {
             return None;
         }
         if cache.images.contains_key(&host_id) {
@@ -166,15 +213,25 @@ fn encode_placement_update(
             cache.placements.retain(|(id, _), _| *id != host_id);
             cache.replayed_placements.retain(|(id, _)| *id != host_id);
         }
-        if let Some(data) = &placement.raw_data {
+        if let Some((png, size)) = scaled {
             output.push_bytes(std::mem::take(&mut bytes));
             output.operations.push(GraphicsOperation::Upload {
-                control: upload_control(placement, format_code, host_id),
-                data: Arc::clone(data),
+                control: format!("a=t,t=d,f=100,i={host_id},q=2"),
+                data: Arc::from(png),
             });
+            cache.uploaded_sizes.insert(host_id, size);
         } else {
-            let control = upload_control(placement, format_code, host_id);
-            encode_kitty_data(&mut bytes, &control, &placement.placement.data);
+            if let Some(data) = &placement.raw_data {
+                output.push_bytes(std::mem::take(&mut bytes));
+                output.operations.push(GraphicsOperation::Upload {
+                    control: upload_control(placement, format_code, host_id),
+                    data: Arc::clone(data),
+                });
+            } else {
+                let control = upload_control(placement, format_code, host_id);
+                encode_kitty_data(&mut bytes, &control, &placement.placement.data);
+            }
+            cache.uploaded_sizes.remove(&host_id);
         }
         cache.images.insert(host_id, image_signature);
     }
@@ -211,6 +268,7 @@ fn release_superseded_source_image(
     }
     encode_delete_image(bytes, previous);
     cache.images.remove(&previous);
+    cache.uploaded_sizes.remove(&previous);
     cache.placements.retain(|(id, _), _| *id != previous);
     cache.replayed_placements.retain(|(id, _)| *id != previous);
 }
@@ -257,8 +315,10 @@ fn encode_graphics_output(
         cache.placements.remove(&key);
         cache.replayed_placements.remove(&key);
     }
+    let scaled_sizes = scaled_upload_sizes(placements, client_image_oversample());
     for placement in placements {
-        if let Some(transaction) = encode_placement_update(cache, placement) {
+        let scaled_size = scaled_sizes.get(&placement_host_id(placement)).copied();
+        if let Some(transaction) = encode_placement_update(cache, placement, scaled_size) {
             output.extend(transaction);
         }
     }
@@ -288,8 +348,18 @@ impl HostGraphicsCache {
         self.images.clear();
         self.placements.clear();
         self.sources.clear();
+        self.uploaded_sizes.clear();
         self.reset_replay();
         bytes
+    }
+
+    /// Forgets a host image the caller deleted from the terminal itself.
+    pub(crate) fn forget_image(&mut self, id: u32) {
+        self.images.remove(&id);
+        self.uploaded_sizes.remove(&id);
+        self.placements.retain(|(image, _), _| *image != id);
+        self.sources.retain(|_, image| *image != id);
+        self.replayed_placements.retain(|(image, _)| *image != id);
     }
 }
 
@@ -640,6 +710,197 @@ fn scale_pixels(value: u32, source: u32, dest: u32) -> u32 {
     ((value as u64).saturating_mul(source as u64) / dest.max(1) as u64).min(u32::MAX as u64) as u32
 }
 
+/// This client's oversample, read once from its environment.
+fn client_image_oversample() -> f64 {
+    static VALUE: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *VALUE.get_or_init(|| {
+        let raw = std::env::var(HOST_IMAGE_OVERSAMPLE_ENV).ok();
+        let value = parse_oversample(raw.as_deref());
+        if raw.is_some() && value.is_none() {
+            tracing::warn!(
+                value = raw.as_deref(),
+                "{HOST_IMAGE_OVERSAMPLE_ENV} is not a number from 0.25 to 4; using {HOST_IMAGE_OVERSAMPLE}"
+            );
+        }
+        value.unwrap_or(HOST_IMAGE_OVERSAMPLE)
+    })
+}
+
+fn parse_oversample(raw: Option<&str>) -> Option<f64> {
+    raw.and_then(|raw| raw.trim().parse::<f64>().ok())
+        .filter(|value| (0.25..=4.0).contains(value))
+}
+
+fn scale_pixels_up(value: u32, source: u32, dest: u32) -> u32 {
+    (value as u64)
+        .saturating_mul(source as u64)
+        .div_ceil(dest.max(1) as u64)
+        .min(u32::MAX as u64) as u32
+}
+
+fn placement_host_id(placement: &HostPlacement) -> u32 {
+    placement
+        .host_image_id
+        .unwrap_or_else(|| host_image_id(placement.pane_id, &placement.placement))
+}
+
+/// The size to upload each RGB or RGBA host image at this frame, for an image
+/// its visible placements draw well under its own size. The largest share any
+/// placement draws at decides it, so no placement is short of pixels.
+fn scaled_upload_sizes(placements: &[HostPlacement], oversample: f64) -> HashMap<u32, (u32, u32)> {
+    let mut shares: HashMap<u32, (f64, u32, u32)> = HashMap::new();
+    for placement in placements {
+        let image = &placement.placement;
+        if !matches!(image.format, KittyImageFormat::Rgb | KittyImageFormat::Rgba)
+            || image.image_width == 0
+            || image.image_height == 0
+            || !placement.cell_size.is_known()
+            || clipped_placement(placement).is_none()
+        {
+            continue;
+        }
+        let render = image.render;
+        let source_width = if render.source_width == 0 {
+            image.image_width
+        } else {
+            render.source_width
+        };
+        let source_height = if render.source_height == 0 {
+            image.image_height
+        } else {
+            render.source_height
+        };
+        let drawn_width = render.pixel_width.max(
+            render
+                .grid_cols
+                .saturating_mul(placement.cell_size.width_px),
+        );
+        let drawn_height = render.pixel_height.max(
+            render
+                .grid_rows
+                .saturating_mul(placement.cell_size.height_px),
+        );
+        let share = (drawn_width as f64 / source_width.max(1) as f64)
+            .max(drawn_height as f64 / source_height.max(1) as f64)
+            * oversample;
+        let entry = shares.entry(placement_host_id(placement)).or_insert((
+            0.0,
+            image.image_width,
+            image.image_height,
+        ));
+        entry.0 = entry.0.max(share);
+    }
+    shares
+        .into_iter()
+        .filter(|(_, (share, _, _))| *share > 0.0 && *share < HOST_IMAGE_SCALE_BELOW)
+        .map(|(id, (share, width, height))| {
+            let scaled = |side: u32| ((side as f64 * share).ceil() as u32).clamp(1, side);
+            (id, (scaled(width), scaled(height)))
+        })
+        .collect()
+}
+
+/// A placement's source rectangle moved into the pixels of an image sent at `sent`.
+fn scale_clipped(
+    mut clipped: ClippedPlacement,
+    sent: Option<(u32, u32)>,
+    width: u32,
+    height: u32,
+) -> ClippedPlacement {
+    let Some((sent_width, sent_height)) = sent else {
+        return clipped;
+    };
+    let x = scale_pixels(clipped.source_x, sent_width, width).min(sent_width - 1);
+    let y = scale_pixels(clipped.source_y, sent_height, height).min(sent_height - 1);
+    let end_x =
+        scale_pixels_up(clipped.source_x + clipped.source_width, sent_width, width).min(sent_width);
+    let end_y = scale_pixels_up(
+        clipped.source_y + clipped.source_height,
+        sent_height,
+        height,
+    )
+    .min(sent_height);
+    clipped.source_x = x;
+    clipped.source_y = y;
+    clipped.source_width = end_x.saturating_sub(x).max(1);
+    clipped.source_height = end_y.saturating_sub(y).max(1);
+    clipped
+}
+
+/// The image box-filtered down to `width` x `height` and encoded as PNG, or nothing
+/// for a format or a buffer this cannot read.
+fn scaled_png(
+    data: &[u8],
+    image: &KittyImagePlacement,
+    format_code: u32,
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    let (channels, color) = match format_code {
+        24 => (3, png::ColorType::Rgb),
+        32 => (4, png::ColorType::Rgba),
+        _ => return None,
+    };
+    let (source_width, source_height) = (image.image_width, image.image_height);
+    if data.len() != source_width as usize * source_height as usize * channels {
+        return None;
+    }
+    let pixels = downscale_box(data, source_width, source_height, channels, width, height);
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, width, height);
+        encoder.set_color(color);
+        encoder.set_depth(png::BitDepth::Eight);
+        // Best costs little on an image already cut to its drawn size: 47 KB
+        // became 45 KB at 1x, and 85 KB 74 KB at 2x, for a 1734x1040 screenshot.
+        encoder.set_compression(png::Compression::Best);
+        let mut writer = encoder.write_header().ok()?;
+        writer.write_image_data(&pixels).ok()?;
+        writer.finish().ok()?;
+    }
+    Some(png)
+}
+
+/// Each output pixel is the mean of the source pixels under it.
+fn downscale_box(
+    data: &[u8],
+    source_width: u32,
+    source_height: u32,
+    channels: usize,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let span = |out: u32, out_len: u32, source_len: u32| {
+        let start = scale_pixels(out, source_len, out_len);
+        let end = scale_pixels_up(out + 1, source_len, out_len).clamp(start + 1, source_len);
+        start as usize..end as usize
+    };
+    let mut pixels = vec![0_u8; width as usize * height as usize * channels];
+    let mut sum = [0_u64; 4];
+    for out_y in 0..height {
+        let rows = span(out_y, height, source_height);
+        for out_x in 0..width {
+            let cols = span(out_x, width, source_width);
+            sum[..channels].fill(0);
+            for row in rows.clone() {
+                let line = row * source_width as usize;
+                for col in cols.clone() {
+                    let at = (line + col) * channels;
+                    for (total, value) in sum[..channels].iter_mut().zip(&data[at..at + channels]) {
+                        *total += u64::from(*value);
+                    }
+                }
+            }
+            let count = (rows.len() * cols.len()) as u64;
+            let at = (out_y as usize * width as usize + out_x as usize) * channels;
+            for (out, total) in pixels[at..at + channels].iter_mut().zip(&sum[..channels]) {
+                *out = ((total + count / 2) / count) as u8;
+            }
+        }
+    }
+    pixels
+}
+
 fn image_signature(placement: &HostPlacement, format_code: u32) -> ImageSignature {
     ImageSignature {
         image_width: placement.placement.image_width,
@@ -812,6 +1073,103 @@ mod tests {
         }
         bytes.extend(encode_graphics_output(cache, placements).into_inline_bytes());
         bytes
+    }
+
+    /// A 400x400 RGBA image drawn in `cols` x `rows` cells of 10 px.
+    fn large_placement(cols: u32, rows: u32, viewport: (i32, i32)) -> HostPlacement {
+        let mut placement = test_placement(viewport.0, viewport.1);
+        placement.placement.image_width = 400;
+        placement.placement.image_height = 400;
+        placement.placement.data = (0..400 * 400 * 4).map(|i| (i % 251) as u8).collect();
+        placement.placement.data_len = placement.placement.data.len();
+        placement.placement.render.grid_cols = cols;
+        placement.placement.render.grid_rows = rows;
+        placement
+    }
+
+    fn uploads(output: &GraphicsOutput) -> Vec<(&str, &[u8])> {
+        output
+            .operations
+            .iter()
+            .filter_map(|op| match op {
+                GraphicsOperation::Upload { control, data } => Some((control.as_str(), &data[..])),
+                GraphicsOperation::Bytes(bytes) => String::from_utf8_lossy(bytes)
+                    .contains("a=t")
+                    .then_some(("inline", &[][..])),
+            })
+            .collect()
+    }
+
+    fn png_size(data: &[u8]) -> (u32, u32) {
+        let reader = png::Decoder::new(std::io::Cursor::new(data))
+            .read_info()
+            .expect("a PNG");
+        (reader.info().width, reader.info().height)
+    }
+
+    #[test]
+    fn image_drawn_well_under_its_size_is_uploaded_scaled_as_png() {
+        let mut placement = large_placement(3, 3, (0, 0));
+        placement.raw_data = Some(Arc::from(std::mem::take(&mut placement.placement.data)));
+        let mut cache = HostGraphicsCache::default();
+        let output = encode_graphics_output(&mut cache, &[placement]);
+        let uploads = uploads(&output);
+        assert_eq!(uploads.len(), 1);
+        let (control, data) = uploads[0];
+        assert!(control.starts_with("a=t,t=d,f=100,"), "{control}");
+        // 30 px drawn, twice that kept: 60 of 400.
+        assert_eq!(png_size(data), (60, 60));
+        let text = String::from_utf8_lossy(&output.into_inline_bytes()).into_owned();
+        assert!(
+            text.contains("a=p,") && text.contains(",w=60,h=60"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn scaled_image_is_sent_again_whole_when_drawn_near_its_size() {
+        let mut cache = HostGraphicsCache::default();
+        let small = update(&mut cache, &[large_placement(3, 3, (0, 0))], false);
+        assert!(String::from_utf8_lossy(&small).contains("f=100"));
+        let moved = update(&mut cache, &[large_placement(3, 3, (1, 0))], false);
+        assert!(!String::from_utf8_lossy(&moved).contains("a=t"));
+        let large = update(&mut cache, &[large_placement(20, 10, (0, 0))], false);
+        let text = String::from_utf8_lossy(&large);
+        assert!(text.contains("a=t,t=d,f=32,s=400,v=400"), "{text}");
+        assert!(cache.uploaded_sizes.is_empty());
+    }
+
+    #[test]
+    fn cropped_placement_of_a_scaled_image_addresses_its_pixels() {
+        let mut cache = HostGraphicsCache::default();
+        let bytes = update(&mut cache, &[large_placement(3, 3, (-1, -1))], false);
+        let text = String::from_utf8_lossy(&bytes);
+        // One cell of three cropped from the top and the left: source 133..399 of
+        // 400, which is 19..60 of the 60 sent.
+        assert!(text.contains(",x=19,y=19,w=41,h=41"), "{text}");
+    }
+
+    #[test]
+    fn oversample_is_the_clients_own_and_keeps_to_its_range() {
+        assert_eq!(parse_oversample(Some("1")), Some(1.0));
+        assert_eq!(parse_oversample(Some(" 1.5 ")), Some(1.5));
+        for bad in ["0", "0.1", "5", "NaN", "inf", "two", ""] {
+            assert_eq!(parse_oversample(Some(bad)), None, "{bad}");
+        }
+        assert_eq!(parse_oversample(None), None);
+
+        let placement = large_placement(3, 3, (0, 0));
+        let id = placement_host_id(&placement);
+        let sizes = |oversample| scaled_upload_sizes(std::slice::from_ref(&placement), oversample);
+        assert_eq!(sizes(1.0).get(&id), Some(&(30, 30)));
+        assert_eq!(sizes(HOST_IMAGE_OVERSAMPLE).get(&id), Some(&(60, 60)));
+    }
+
+    #[test]
+    fn box_filter_averages_the_pixels_under_each_output_pixel() {
+        let rgb = [0, 0, 0, 10, 20, 30, 20, 40, 60, 30, 60, 90];
+        assert_eq!(downscale_box(&rgb, 2, 2, 3, 1, 1), vec![15, 30, 45]);
+        assert_eq!(downscale_box(&rgb, 2, 2, 3, 2, 2), rgb.to_vec());
     }
 
     #[test]
