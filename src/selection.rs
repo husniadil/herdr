@@ -343,13 +343,24 @@ fn should_prefer_osc52_for_env(
     ssh_connection.is_some() || ssh_tty.is_some() || vscode_ipc_hook_cli.is_some() || wsl
 }
 
+/// Asks one client process for OSC 52 in place of the native clipboard when set
+/// to `1`. Whoever starts the client may know that the terminal it draws to is on
+/// another machine, as a browser elsewhere is, and herdr cannot tell: the native
+/// clipboard there is this machine's, and a copy never reaches the person.
+const PREFER_OSC52_ENV: &str = "HERDR_CLIPBOARD_OSC52";
+
+fn osc52_requested(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|v| v == "1")
+}
+
 fn should_prefer_osc52() -> bool {
-    should_prefer_osc52_for_env(
-        std::env::var_os("SSH_CONNECTION").as_deref(),
-        std::env::var_os("SSH_TTY").as_deref(),
-        std::env::var_os("VSCODE_IPC_HOOK_CLI").as_deref(),
-        is_wsl(),
-    )
+    osc52_requested(std::env::var_os(PREFER_OSC52_ENV).as_deref())
+        || should_prefer_osc52_for_env(
+            std::env::var_os("SSH_CONNECTION").as_deref(),
+            std::env::var_os("SSH_TTY").as_deref(),
+            std::env::var_os("VSCODE_IPC_HOOK_CLI").as_deref(),
+            is_wsl(),
+        )
 }
 
 /// Write clipboard bytes to the system clipboard via native platform tools or OSC 52.
@@ -433,6 +444,14 @@ mod tests {
             false
         ));
         assert!(!should_prefer_osc52_for_env(None, None, None, false));
+    }
+
+    #[test]
+    fn a_caller_can_ask_for_osc52() {
+        assert!(osc52_requested(Some(OsStr::new("1"))));
+        assert!(!osc52_requested(Some(OsStr::new("0"))));
+        assert!(!osc52_requested(Some(OsStr::new(""))));
+        assert!(!osc52_requested(None));
     }
 
     #[test]
