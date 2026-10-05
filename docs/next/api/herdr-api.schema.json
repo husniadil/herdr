@@ -778,6 +778,11 @@
             "agent_status": {
               "$ref": "#/schemas/event/$defs/AgentStatus"
             },
+            "alternate_screen": {
+              "default": false,
+              "description": "Whether the terminal is on its alternate screen, where a full-screen\nprogram draws. Always serialized, so its absence means an older server.",
+              "type": "boolean"
+            },
             "cwd": {
               "type": [
                 "string",
@@ -8113,6 +8118,11 @@
             },
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
+            },
+            "alternate_screen": {
+              "default": false,
+              "description": "Whether the terminal is on its alternate screen, where a full-screen\nprogram draws. Always serialized, so its absence means an older server.",
+              "type": "boolean"
             },
             "cwd": {
               "type": [
