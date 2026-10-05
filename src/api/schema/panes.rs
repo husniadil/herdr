@@ -480,6 +480,10 @@ pub struct PaneInfo {
     pub agent_session: Option<AgentSessionInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<PaneScrollInfo>,
+    /// Whether the terminal is on its alternate screen, where a full-screen
+    /// program draws. Always serialized, so its absence means an older server.
+    #[serde(default)]
+    pub alternate_screen: bool,
     pub revision: u64,
 }
 
