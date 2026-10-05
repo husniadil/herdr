@@ -2518,6 +2518,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_pane_get_reports_the_alternate_screen() {
+        let (mut app, public_pane_id, _) = app_with_scrollback_runtime();
+        let response = app.handle_pane_get(
+            "main".into(),
+            PaneTarget {
+                pane_id: public_pane_id,
+            },
+        );
+        // Serialized when false too: a caller reads its absence as an older server.
+        assert!(response.contains("\"alternate_screen\":false"));
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneInfo { pane } = success.result else {
+            panic!("expected pane info response");
+        };
+        assert!(!pane.alternate_screen);
+
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let runtime = crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+            20,
+            5,
+            1000,
+            b"\x1b[?1049hALT",
+        );
+        app.state.insert_test_runtime(pane_id, runtime);
+        let response = app.handle_pane_get(
+            "alt".into(),
+            PaneTarget {
+                pane_id: public_pane_id,
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneInfo { pane } = success.result else {
+            panic!("expected pane info response");
+        };
+        assert!(pane.alternate_screen);
+    }
+
+    #[tokio::test]
     async fn api_pane_scroll_sets_and_clamps_endpoint_owned_history() {
         let (mut app, public_pane_id, pane_id) = app_with_scrollback_runtime();
         let runtime = app
