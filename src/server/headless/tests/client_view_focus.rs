@@ -268,6 +268,55 @@ async fn public_focus_moves_untagged_clients_and_leaves_tagged_ones() {
     shutdown_test_runtimes(&mut server);
 }
 
+fn close_every_workspace(server: &mut HeadlessServer, workspace_ids: &[String]) {
+    for workspace_id in workspace_ids {
+        let response = call_api(
+            server,
+            api::schema::Method::WorkspaceClose(api::schema::WorkspaceCloseParams {
+                workspace_id: workspace_id.clone(),
+                close_group: false,
+            }),
+        );
+        assert!(response.get("error").is_none(), "{response}");
+    }
+}
+
+#[tokio::test]
+async fn a_tagged_client_attached_to_an_empty_server_is_given_no_workspace() {
+    let mut server = test_headless_server();
+    server.app.state.workspaces.clear();
+    server.app.state.active = None;
+    server.app.state.mode = crate::app::Mode::Navigate;
+
+    let _tagged = connect_shell_with_view(&mut server, 8, None, Some("b"));
+
+    assert!(server.app.state.workspaces.is_empty());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn closing_the_last_workspace_under_a_tagged_client_leaves_none() {
+    let (mut server, workspace_ids, _) = two_workspace_server();
+    let _tagged = connect_shell_with_view(&mut server, 8, Some(&workspace_ids[0]), Some("b"));
+
+    close_every_workspace(&mut server, &workspace_ids);
+
+    assert!(server.app.state.workspaces.is_empty());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn closing_the_last_workspace_beside_an_untagged_client_makes_a_new_one() {
+    let (mut server, workspace_ids, _) = two_workspace_server();
+    let _untagged = connect_shell_with_view(&mut server, 7, None, None);
+    let _tagged = connect_shell_with_view(&mut server, 8, Some(&workspace_ids[0]), Some("b"));
+
+    close_every_workspace(&mut server, &workspace_ids);
+
+    assert_eq!(server.app.state.workspaces.len(), 1);
+    shutdown_test_runtimes(&mut server);
+}
+
 #[tokio::test]
 async fn client_view_focus_on_a_pane_focuses_it_in_its_tab_for_that_client() {
     let mut server = test_headless_server();

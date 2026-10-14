@@ -56,8 +56,8 @@ use crate::server::client_shell::{
 };
 use crate::server::client_transport::ServerEvent;
 use crate::server::clients::{
-    latest_shell_client, render_targets, terminal_stream_client_ids, ClientConnection,
-    ClientConnectionMode, ClientShellInputTarget, DeferredRender,
+    has_untagged_shell_client, latest_shell_client, render_targets, terminal_stream_client_ids,
+    ClientConnection, ClientConnectionMode, ClientShellInputTarget, DeferredRender,
 };
 use crate::server::keybindings::{app_keybindings, apply_keybindings};
 use crate::server::notifications::{
@@ -526,7 +526,7 @@ impl HeadlessServer {
                 needs_graphics_render = false;
             }
 
-            if latest_shell_client(&self.clients).is_some() && self.app.ensure_default_workspace() {
+            if has_untagged_shell_client(&self.clients) && self.app.ensure_default_workspace() {
                 needs_render = true;
                 needs_full_render = true;
                 needs_graphics_render = false;
@@ -1980,7 +1980,9 @@ impl HeadlessServer {
                     render_encoding = ?protocol::RenderEncoding::SemanticFrame,
                     "client connected"
                 );
-                self.app.ensure_default_workspace();
+                if client_tag.is_none() {
+                    self.app.ensure_default_workspace();
+                }
                 let first_app_client = self.app_client_count() == 0;
                 let last_activity = self.allocate_activity_stamp();
                 let observed = crate::kitty_graphics::HostCellSize {
@@ -3366,7 +3368,7 @@ impl HeadlessServer {
             }
         }
 
-        if !skip_default_workspace && latest_shell_client(&self.clients).is_some() {
+        if !skip_default_workspace && has_untagged_shell_client(&self.clients) {
             changed |= self.app.ensure_default_workspace();
         }
 

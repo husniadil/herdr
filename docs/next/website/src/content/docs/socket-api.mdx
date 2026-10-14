@@ -361,7 +361,9 @@ and a server rejects the connection with `invalid_client_tag` otherwise. Tags ar
 not required to be unique. A tagged client is moved only by `client.view.focus`: a
 request that moves the server's focus (`workspace.focus`, `tab.focus`, `pane.focus`,
 `agent.focus`, or a create, pane move or worktree open with `focus`) moves every
-untagged client and leaves tagged ones where they are.
+untagged client and leaves tagged ones where they are. A server with no workspaces
+opens one for an untagged client, and none for a tagged client: what a tagged client
+shows is its caller's to decide, and the caller ends it once that is gone.
 
 List connected clients, in `client_id` order:
 
