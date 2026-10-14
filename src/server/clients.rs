@@ -494,6 +494,15 @@ pub(crate) fn latest_shell_client(clients: &HashMap<u64, ClientConnection>) -> O
         .map(|(&client_id, _)| client_id)
 }
 
+/// Whether an active shell client without a tag is attached. Only such a client is
+/// given a workspace when the server has none. A tagged client's view belongs to the
+/// caller that tagged it, which ends the client once what it showed is gone.
+pub(crate) fn has_untagged_shell_client(clients: &HashMap<u64, ClientConnection>) -> bool {
+    clients
+        .values()
+        .any(|client| client.is_active_shell_client() && client.client_tag.is_none())
+}
+
 pub(crate) fn terminal_stream_client_ids(
     clients: &HashMap<u64, ClientConnection>,
     terminal_id: &str,
