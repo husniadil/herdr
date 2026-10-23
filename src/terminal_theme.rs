@@ -148,12 +148,12 @@ pub fn osc_reset_default_color_sequence(kind: DefaultColorKind) -> &'static str 
 fn parse_rgb_color(value: &str) -> Option<RgbColor> {
     if let Some(rgb) = value.strip_prefix("rgb:") {
         let mut parts = rgb.split('/');
-        return Some(RgbColor {
+        let color = RgbColor {
             r: parse_hex_component(parts.next()?)?,
             g: parse_hex_component(parts.next()?)?,
             b: parse_hex_component(parts.next()?)?,
-        })
-        .filter(|_| parts.next().is_none());
+        };
+        return parts.next().is_none().then_some(color);
     }
 
     if let Some(hex) = value.strip_prefix('#') {
@@ -200,6 +200,14 @@ mod tests {
                     b: 0xee,
                 },
             ))
+        );
+    }
+
+    #[test]
+    fn rejects_rgb_response_with_extra_component() {
+        assert_eq!(
+            parse_default_color_response("\x1b]10;rgb:cccc/dddd/eeee/ffff\x1b\\"),
+            None
         );
     }
 
