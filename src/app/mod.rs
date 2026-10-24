@@ -183,7 +183,7 @@ fn auto_updates_enabled(background_updates: bool) -> bool {
 }
 
 fn background_update_check_enabled(background_updates: bool, check_enabled: bool) -> bool {
-    auto_updates_enabled(background_updates) && check_enabled
+    auto_updates_enabled(background_updates) && check_enabled && !crate::update::is_fork_build()
 }
 
 fn load_plugin_registry(
