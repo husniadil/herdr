@@ -91,6 +91,17 @@ impl Version {
     }
 }
 
+/// Whether this binary is the fork's build (`0.9.5+agm.1`). Upstream's
+/// manifest offers upstream's release, which carries none of the fork's
+/// patches, so a fork build neither checks for it nor installs it.
+pub fn is_fork_build() -> bool {
+    is_fork_version(crate::build_info::BASE_VERSION)
+}
+
+fn is_fork_version(version: &str) -> bool {
+    version.contains("+agm.")
+}
+
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
@@ -2110,6 +2121,13 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 
 /// Manual self-update command (`herdr update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+    if is_fork_build() {
+        return Err(format!(
+            "self-update is disabled for the fork build {}; it ships with Agamemnon, so update Agamemnon instead",
+            crate::build_info::BASE_VERSION
+        ));
+    }
+
     let channel = UpdateChannel::configured();
 
     if is_homebrew_managed_install() {
@@ -3013,6 +3031,13 @@ mod tests {
         assert!(running_inside_herdr_env(Some(crate::HERDR_ENV_VALUE)));
         assert!(!running_inside_herdr_env(None));
         assert!(!running_inside_herdr_env(Some("0")));
+    }
+
+    #[test]
+    fn a_fork_version_is_told_apart_by_its_build_metadata() {
+        assert!(is_fork_version("0.9.5+agm.1"));
+        assert!(!is_fork_version("0.9.5"));
+        assert!(!is_fork_version("0.9.5-preview.20261024"));
     }
 
     #[test]
