@@ -1536,6 +1536,7 @@ mod tests {
             default_capabilities(),
             None,
             None,
+            None,
         );
 
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -1552,6 +1553,7 @@ mod tests {
             },
             &tx,
             default_capabilities(),
+            None,
             None,
             None,
         );
@@ -1572,6 +1574,7 @@ mod tests {
             default_capabilities(),
             None,
             None,
+            None,
         );
 
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -1588,6 +1591,7 @@ mod tests {
             },
             &tx,
             default_capabilities(),
+            None,
             None,
             None,
         );

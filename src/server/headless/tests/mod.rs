@@ -6611,6 +6611,9 @@ async fn client_shell_requests_host_pixels_for_an_unfocused_pixel_pane() {
             endpoint_keybindings: false,
             mouse_capture: true,
             surface_active: true,
+            workspace_id: None,
+            client_tag: None,
+            snapshot_acks: false,
             writer,
         })
     );
