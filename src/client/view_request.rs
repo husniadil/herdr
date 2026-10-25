@@ -94,7 +94,7 @@ pub fn extract_launch_view_args(
         .enumerate()
         .skip(1)
         .take_while(|(_, arg)| arg.as_str() != "--")
-        .any(|(index, arg)| !arg.starts_with('-') && !(index == 1 && arg == "client"));
+        .any(|(index, arg)| !(arg.starts_with('-') || index == 1 && arg == "client"));
     if request != ClientViewRequest::default() && names_a_subcommand {
         return Err(format!(
             "{WORKSPACE_FLAG} and {CLIENT_TAG_FLAG} apply only to launching a client"
