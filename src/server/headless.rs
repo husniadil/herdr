@@ -165,6 +165,28 @@ const SHUTDOWN_API_TIMEOUT: Duration = Duration::from_secs(5);
 /// otherwise idle. Keep this much slower than the old resize-poll cadence to
 /// avoid reintroducing the idle CPU spin.
 const CLIENT_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// How long a foreground client that has not reported both default colours keeps
+/// the ones the server already holds.
+const HOST_THEME_REPORT_GRACE: Duration = Duration::from_secs(2);
+
+/// The theme panes get from a foreground client. Until it has reported both
+/// default colours they stay at `known`, the previous client's, so a client
+/// promoted as it connects does not flash them away. A terminal that never
+/// answers would keep another device's colours for good, so past
+/// `HOST_THEME_REPORT_GRACE` the client's own report is used as it stands, and
+/// a half-reported pair is no pair.
+fn foreground_host_theme(
+    client: &ClientConnection,
+    known: crate::terminal_theme::TerminalTheme,
+    now: Instant,
+) -> crate::terminal_theme::TerminalTheme {
+    let known = if now.saturating_duration_since(client.connected_at) < HOST_THEME_REPORT_GRACE {
+        known
+    } else {
+        crate::terminal_theme::TerminalTheme::default()
+    };
+    client.host_terminal_theme.with_default_colors_or(known)
+}
 
 // Split shell redraws need several early updates; sustained output still coalesces.
 const INTERACTIVE_RENDER_BUDGET: u8 = 16;
@@ -520,6 +542,11 @@ impl HeadlessServer {
 
             self.poll_pending_alt_screen_reads(now);
             self.poll_pending_client_view_waits(now);
+            if self.settle_unreported_host_theme(now) {
+                needs_render = true;
+                needs_full_render = true;
+                needs_graphics_render = false;
+            }
             if self.process_deferred_alt_screen_reads() {
                 needs_render = true;
                 needs_full_render = true;
@@ -841,7 +868,8 @@ impl HeadlessServer {
         } else {
             crate::kitty_graphics::HostCellSize::default()
         };
-        let host_terminal_theme = client.host_terminal_theme;
+        let host_terminal_theme =
+            foreground_host_theme(client, self.app.state.host_terminal_theme, Instant::now());
         let host_terminal_appearance = client.host_terminal_appearance;
         let host_terminal_appearance_explicit = client.host_terminal_appearance_explicit;
         let outer_terminal_focus = client.outer_terminal_focus;
@@ -867,9 +895,32 @@ impl HeadlessServer {
                 host_terminal_appearance_explicit,
             );
         }
+        self.app.set_host_terminal_theme(host_terminal_theme);
+    }
+
+    /// Applies the foreground client's own colours once its grace for reporting
+    /// them has passed (`foreground_host_theme`).
+    fn settle_unreported_host_theme(&mut self, now: Instant) -> bool {
+        let Some(client_id) = self.foreground_client_id else {
+            return false;
+        };
         let known = self.app.state.host_terminal_theme;
-        self.app
-            .set_host_terminal_theme(host_terminal_theme.with_default_colors_or(known));
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return false;
+        };
+        if client.host_theme_grace_applied
+            || !client.shell_surface_active
+            || now.saturating_duration_since(client.connected_at) < HOST_THEME_REPORT_GRACE
+        {
+            return false;
+        }
+        client.host_theme_grace_applied = true;
+        let theme = foreground_host_theme(client, known, now);
+        let changed = self.app.set_host_terminal_theme(theme);
+        if changed {
+            self.resize_shared_runtime_to_effective_size_before_input();
+        }
+        changed
     }
 
     fn sync_visible_server_config_diagnostic(&mut self, uses_local_keybindings: bool) {
@@ -2349,10 +2400,12 @@ impl HeadlessServer {
                         client.host_terminal_appearance,
                         client.host_terminal_appearance_explicit,
                     );
-                let known = self.app.state.host_terminal_theme;
-                changed |= self.app.set_host_terminal_theme(
-                    client.host_terminal_theme.with_default_colors_or(known),
+                let theme = foreground_host_theme(
+                    client,
+                    self.app.state.host_terminal_theme,
+                    Instant::now(),
                 );
+                changed |= self.app.set_host_terminal_theme(theme);
                 if changed {
                     self.resize_shared_runtime_to_effective_size_before_input();
                 }
