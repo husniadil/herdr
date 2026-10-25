@@ -2497,6 +2497,29 @@ mod tests {
         assert_eq!(response["error"]["code"], "pane_not_found");
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn pane_redraw_request_is_refused_where_there_is_no_pty_to_nudge() {
+        let mut app = test_app();
+        let workspace = Workspace::test_new("api-pane-redraw");
+        let pane = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let pane_id = app.pane_info(0, pane).unwrap().pane_id;
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_pane_redraw".into(),
+            method: crate::api::schema::Method::PaneRedraw(crate::api::schema::PaneTarget {
+                pane_id,
+            }),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(response["error"]["code"], "platform_unsupported");
+    }
+
     #[test]
     fn pane_rename_request_sets_and_clears_manual_label() {
         let mut app = test_app();
