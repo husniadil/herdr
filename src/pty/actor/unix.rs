@@ -63,6 +63,24 @@ fn nudge_restores(resized: Option<PtyResize>, nudge: PtyResize) -> PtyResize {
     resized.unwrap_or(nudge)
 }
 
+/// Shortest time a nudge holds the smaller size.
+const NUDGE_HOLD_MIN: Duration = Duration::from_millis(30);
+/// Longest time a nudge holds the smaller size for a process that does not draw.
+const NUDGE_HOLD_MAX: Duration = Duration::from_millis(500);
+
+/// Whether a nudge shrunk at `shrunk_at` puts the size back at `now`.
+///
+/// Pending SIGWINCHs coalesce into one, and a process reads the size when it
+/// handles that one. Restored on a fixed timer, a process busy past it read the
+/// size once, after both changes, saw it unchanged and drew nothing (Node's
+/// `resize` event fires only on a changed size). So the smaller size is held
+/// until the process has written output after the shrink, which it does once it
+/// has drawn at that size, and never longer than `NUDGE_HOLD_MAX`.
+fn nudge_restore_due(shrunk_at: Instant, now: Instant, output_seen: bool) -> bool {
+    let held = now.saturating_duration_since(shrunk_at);
+    held >= NUDGE_HOLD_MAX || (output_seen && held >= NUDGE_HOLD_MIN)
+}
+
 #[derive(Default)]
 struct SharedPtyControls {
     resize: Option<PtyResizeRequest>,
@@ -436,6 +454,7 @@ impl PtyIoActor {
             on_read: config.on_read,
             on_reader_exit: config.on_reader_exit,
             poll_observer,
+            pending_nudge_restore: None,
         };
         std::thread::Builder::new()
             .name(format!("herdr-pty-{}", config.pane_id))
@@ -470,6 +489,20 @@ struct PtyIoActorRunner {
     on_read: ReadCallback,
     on_reader_exit: Option<ReaderExitCallback>,
     poll_observer: Option<std_mpsc::Sender<()>>,
+    pending_nudge_restore: Option<PendingNudgeRestore>,
+}
+
+/// A nudge that has shrunk the PTY and has yet to put `size` back.
+struct PendingNudgeRestore {
+    size: PtyResize,
+    shrunk_at: Instant,
+    output_seen: bool,
+}
+
+enum PtyRead {
+    Data,
+    Empty,
+    Closed,
 }
 
 struct ActiveSubmission {
@@ -525,6 +558,7 @@ impl PtyIoActorRunner {
             }
 
             self.apply_pending_controls();
+            self.restore_nudge_if_due(Instant::now());
 
             if !self.pending_writes.is_empty() {
                 match self.flush_pending_writes_once() {
@@ -750,6 +784,8 @@ impl PtyIoActorRunner {
             ));
         }
         self.apply_pending_controls();
+        // The next server takes the PTY at the size it is left at.
+        self.restore_nudge_after_floor();
         if self.state == ActorState::Released {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -821,6 +857,9 @@ impl PtyIoActorRunner {
         if let Some(request) = resize {
             self.resize(request.resize);
             self.enqueue_terminal_responses(request.terminal_responses);
+            // The resize is a size change of its own and the size wanted now, so a
+            // nudge holding a smaller one has nothing left to put back.
+            self.pending_nudge_restore = None;
         }
         if let Some(nudge) = nudge {
             self.nudge(nudge_restores(resized, nudge));
@@ -829,16 +868,23 @@ impl PtyIoActorRunner {
     }
 
     fn read_once(&mut self) -> bool {
+        !matches!(self.read_chunk(), PtyRead::Closed)
+    }
+
+    fn read_chunk(&mut self) -> PtyRead {
         let mut buf = [0u8; 8192];
         match self.file.as_ref().read(&mut buf) {
-            Ok(0) => false,
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => true,
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => true,
+            Ok(0) => PtyRead::Closed,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => PtyRead::Empty,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => PtyRead::Data,
             Err(err) => {
                 debug!(pane = self.pane_id, err = %err, "PTY actor read failed");
-                false
+                PtyRead::Closed
             }
             Ok(n) => {
+                if let Some(pending) = self.pending_nudge_restore.as_mut() {
+                    pending.output_seen = true;
+                }
                 let response_order = Arc::clone(&self.response_order);
                 let _order = response_order
                     .lock()
@@ -858,7 +904,7 @@ impl PtyIoActorRunner {
                         .terminal_responses,
                 );
                 self.enqueue_terminal_responses(terminal_responses);
-                true
+                PtyRead::Data
             }
         }
     }
@@ -913,10 +959,25 @@ impl PtyIoActorRunner {
     }
 
     fn poll_timeout_ms(&self) -> i32 {
-        let Some(ActiveSubmission {
-            phase: SubmissionPhase::WaitingUntil(deadline),
-            ..
-        }) = self.active_submission.as_ref()
+        let submission_deadline = match self.active_submission.as_ref() {
+            Some(ActiveSubmission {
+                phase: SubmissionPhase::WaitingUntil(deadline),
+                ..
+            }) => Some(*deadline),
+            _ => None,
+        };
+        let restore_deadline = self.pending_nudge_restore.as_ref().map(|pending| {
+            let hold = if pending.output_seen {
+                NUDGE_HOLD_MIN
+            } else {
+                NUDGE_HOLD_MAX
+            };
+            pending.shrunk_at + hold
+        });
+        let Some(deadline) = [submission_deadline, restore_deadline]
+            .into_iter()
+            .flatten()
+            .min()
         else {
             return ACTOR_IDLE_POLL_MS;
         };
@@ -992,6 +1053,12 @@ impl PtyIoActorRunner {
         if self.state == ActorState::Released {
             return;
         }
+        // Already shrunk: the restore still to come is the size change this one
+        // asks for, now to the latest size.
+        if let Some(pending) = self.pending_nudge_restore.as_mut() {
+            pending.size = resize;
+            return;
+        }
         let nudge = if resize.rows > 2 {
             (
                 resize.rows - 1,
@@ -1017,6 +1084,8 @@ impl PtyIoActorRunner {
         {
             return;
         }
+        // Output the process wrote before the shrink is not its answer to it.
+        self.drain_ready_output();
         self.log_resize_result(fd::resize_pty_fd(
             self.file.as_raw_fd(),
             nudge.0,
@@ -1024,14 +1093,56 @@ impl PtyIoActorRunner {
             nudge.2,
             nudge.3,
         ));
-        std::thread::sleep(Duration::from_millis(30));
-        self.log_resize_result(fd::resize_pty_fd(
-            self.file.as_raw_fd(),
-            resize.rows,
-            resize.cols,
-            resize.cell_width_px,
-            resize.cell_height_px,
-        ));
+        self.pending_nudge_restore = Some(PendingNudgeRestore {
+            size: resize,
+            shrunk_at: Instant::now(),
+            output_seen: false,
+        });
+    }
+
+    fn drain_ready_output(&mut self) {
+        if self.state != ActorState::Running {
+            return;
+        }
+        // Bounded, so a process writing without pause cannot hold the nudge here.
+        for _ in 0..64 {
+            if !matches!(self.read_chunk(), PtyRead::Data) {
+                break;
+            }
+        }
+    }
+
+    /// Puts back the size a nudge shrank once `nudge_restore_due` says so. A
+    /// quiesced actor reads nothing, so it waits out the floor alone.
+    fn restore_nudge_if_due(&mut self, now: Instant) {
+        let Some(pending) = self.pending_nudge_restore.as_ref() else {
+            return;
+        };
+        let output_seen = pending.output_seen || self.state != ActorState::Running;
+        if nudge_restore_due(pending.shrunk_at, now, output_seen) {
+            self.restore_nudge();
+        }
+    }
+
+    fn restore_nudge_after_floor(&mut self) {
+        let Some(pending) = self.pending_nudge_restore.as_ref() else {
+            return;
+        };
+        let floor = (pending.shrunk_at + NUDGE_HOLD_MIN).saturating_duration_since(Instant::now());
+        if !floor.is_zero() {
+            std::thread::sleep(floor);
+        }
+        self.restore_nudge();
+    }
+
+    fn restore_nudge(&mut self) {
+        let Some(pending) = self.pending_nudge_restore.take() else {
+            return;
+        };
+        if self.state == ActorState::Released {
+            return;
+        }
+        self.resize(pending.size);
     }
 
     fn log_resize_result(&self, result: std::io::Result<()>) {
@@ -1127,6 +1238,7 @@ mod tests {
             on_read: Box::new(|_| PtyReadResult::empty()),
             on_reader_exit: None,
             poll_observer: None,
+            pending_nudge_restore: None,
         };
         (runner, peer)
     }
@@ -1657,6 +1769,149 @@ mod tests {
         assert_eq!(nudge_restores(None, old), old);
     }
 
+    fn pty_pair_at(rows: u16, cols: u16) -> (OwnedFd, std::fs::File) {
+        let mut master = -1;
+        let mut slave = -1;
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        let master = unsafe { OwnedFd::from_raw_fd(master) };
+        let slave = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(slave) });
+        fd::resize_pty_fd(master.as_raw_fd(), rows, cols, 0, 0).expect("initial size");
+        (master, slave)
+    }
+
+    fn pty_rows(slave: &std::fs::File) -> u16 {
+        let mut size = libc::winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCGWINSZ, &mut size) },
+            0
+        );
+        size.ws_row
+    }
+
+    fn wait_for_rows(slave: &std::fs::File, rows: u16, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            if pty_rows(slave) == rows {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        pty_rows(slave) == rows
+    }
+
+    fn actor_on_pty(master: OwnedFd) -> PtyIoActorHandle {
+        PtyIoActor::spawn(PtyIoActorConfig {
+            pane_id: 1,
+            master_fd: master,
+            initially_quiesced: false,
+            on_read: Box::new(|_| PtyReadResult::empty()),
+            on_reader_exit: None,
+        })
+        .expect("actor spawn")
+    }
+
+    #[test]
+    fn a_nudge_holds_the_smaller_size_until_the_process_draws() {
+        let (master, mut slave) = pty_pair_at(40, 120);
+        // Output written before the nudge is not the process answering it.
+        slave.write_all(b"earlier output").expect("slave write");
+        let handle = actor_on_pty(master);
+
+        handle.nudge_child_redraw_after_handoff(40, 120, 0, 0);
+        assert!(
+            wait_for_rows(&slave, 39, Duration::from_secs(1)),
+            "the nudge shrinks the pane one row"
+        );
+        // A process busy for longer than a fixed hold reads the size once, after
+        // both changes, and sees no change at all.
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(
+            pty_rows(&slave),
+            39,
+            "the smaller size is held while the process has not drawn"
+        );
+
+        slave.write_all(b"redrawn").expect("slave write");
+        assert!(
+            wait_for_rows(&slave, 40, Duration::from_secs(1)),
+            "the size is restored once the process draws"
+        );
+        handle.shutdown();
+    }
+
+    #[test]
+    fn a_nudge_restores_the_size_when_the_process_never_draws() {
+        let (master, slave) = pty_pair_at(40, 120);
+        let handle = actor_on_pty(master);
+
+        handle.nudge_child_redraw_after_handoff(40, 120, 0, 0);
+        assert!(wait_for_rows(&slave, 39, Duration::from_secs(1)));
+        assert!(
+            wait_for_rows(&slave, 40, NUDGE_HOLD_MAX + Duration::from_secs(1)),
+            "a process that never draws gets its size back"
+        );
+        handle.shutdown();
+    }
+
+    #[test]
+    fn a_resize_during_a_nudge_is_the_size_left_in_place() {
+        let (master, slave) = pty_pair_at(40, 120);
+        let handle = actor_on_pty(master);
+
+        handle.nudge_child_redraw_after_handoff(40, 120, 0, 0);
+        assert!(wait_for_rows(&slave, 39, Duration::from_secs(1)));
+        handle.resize(30, 100, 0, 0, Vec::new());
+        assert!(wait_for_rows(&slave, 30, Duration::from_secs(1)));
+        std::thread::sleep(NUDGE_HOLD_MAX + Duration::from_millis(100));
+        assert_eq!(pty_rows(&slave), 30, "the nudge does not put back 40 rows");
+        handle.shutdown();
+    }
+
+    #[test]
+    fn a_handoff_does_not_take_a_pty_still_shrunk_by_a_nudge() {
+        let (master, slave) = pty_pair_at(40, 120);
+        let handle = actor_on_pty(master);
+
+        handle.nudge_child_redraw_after_handoff(40, 120, 0, 0);
+        assert!(wait_for_rows(&slave, 39, Duration::from_secs(1)));
+        handle
+            .begin_handoff(Duration::from_secs(2))
+            .expect("handoff quiesce");
+        assert_eq!(pty_rows(&slave), 40);
+        handle.shutdown();
+    }
+
+    #[test]
+    fn nudge_restore_waits_for_output_between_the_floor_and_the_ceiling() {
+        let start = Instant::now();
+        assert!(!nudge_restore_due(start, start, true));
+        assert!(!nudge_restore_due(start, start + NUDGE_HOLD_MIN / 2, true));
+        assert!(nudge_restore_due(start, start + NUDGE_HOLD_MIN, true));
+        assert!(!nudge_restore_due(start, start + NUDGE_HOLD_MIN, false));
+        assert!(!nudge_restore_due(
+            start,
+            start + NUDGE_HOLD_MAX - Duration::from_millis(1),
+            false
+        ));
+        assert!(nudge_restore_due(start, start + NUDGE_HOLD_MAX, false));
+    }
+
     #[test]
     fn resize_and_nudge_keep_latest_request_when_command_queue_is_full() {
         let (data_tx, _data_rx) = mpsc::channel(1);
@@ -1747,6 +2002,7 @@ mod tests {
             }),
             on_reader_exit: None,
             poll_observer: None,
+            pending_nudge_restore: None,
         };
         let handle = PtyIoActorHandle {
             data_tx,
@@ -1878,6 +2134,7 @@ mod tests {
             on_read: Box::new(|_| PtyReadResult::empty()),
             on_reader_exit: None,
             poll_observer: None,
+            pending_nudge_restore: None,
         };
 
         runner.begin_handoff().expect("handoff drains queued write");
