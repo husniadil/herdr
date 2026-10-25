@@ -851,9 +851,13 @@ fn scaled_png(
         let mut encoder = png::Encoder::new(&mut png, width, height);
         encoder.set_color(color);
         encoder.set_depth(png::BitDepth::Eight);
-        // Best costs little on an image already cut to its drawn size: 47 KB
-        // became 45 KB at 1x, and 85 KB 74 KB at 2x, for a 1734x1040 screenshot.
-        encoder.set_compression(png::Compression::Best);
+        // This runs on the client's loop, so the encode must stay cheap. On a
+        // 1920x1080 screenshot (release build) Best took 35 ms for a 384x216
+        // thumbnail and 305 ms for 1536x864, Default 14 ms and 108 ms, Fast
+        // 0.6 ms and 6 ms. Fast sends 25% more for the thumbnail (75 KB against
+        // 60 KB) and 56% more for the large one (815 KB against 523 KB), still a
+        // tenth of the 8.3 MB the full image is as RGBA.
+        encoder.set_compression(png::Compression::Fast);
         let mut writer = encoder.write_header().ok()?;
         writer.write_image_data(&pixels).ok()?;
         writer.finish().ok()?;
