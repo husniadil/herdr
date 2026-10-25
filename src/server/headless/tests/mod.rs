@@ -4161,6 +4161,62 @@ fn client_shell_host_theme_is_kept_until_a_new_foreground_client_answers() {
 }
 
 #[test]
+fn a_foreground_client_that_never_reports_colours_stops_keeping_another_clients() {
+    let mut server = test_headless_server();
+    for id in [1, 2] {
+        server.clients.insert(
+            id,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                id,
+                RenderEncoding::SemanticFrame,
+                None,
+            ),
+        );
+    }
+    server.foreground_client_id = Some(1);
+    let color = |r, g, b| protocol::ClientHostColor { r, g, b };
+    let default_color = |client_id, kind, color| ServerEvent::ClientShellHostTheme {
+        client_id,
+        update: protocol::ClientHostThemeUpdate::DefaultColor { kind, color },
+    };
+    use protocol::ClientHostDefaultColorKind::{Background, Foreground};
+    let (dark_fg, dark) = (color(232, 230, 227), color(26, 24, 23));
+    server.handle_server_event(default_color(1, Foreground, dark_fg));
+    server.handle_server_event(default_color(1, Background, dark));
+
+    // Client 2's terminal answers no colour query, or only one of the two.
+    server.foreground_client_id = Some(2);
+    server.sync_foreground_client_state();
+    server.handle_server_event(default_color(2, Background, color(250, 249, 247)));
+    let connected_at = server.clients[&2].connected_at;
+    assert!(!server.settle_unreported_host_theme(connected_at));
+    assert_eq!(
+        server.app.state.host_terminal_theme.background,
+        Some(dark.into()),
+        "a client that may still answer keeps the colours it found"
+    );
+
+    assert!(server.settle_unreported_host_theme(connected_at + HOST_THEME_REPORT_GRACE));
+    assert_eq!(server.app.state.host_terminal_theme.foreground, None);
+    assert_eq!(server.app.state.host_terminal_theme.background, None);
+
+    // Promoted again once its grace has passed, it keeps nothing of client 1's.
+    server.foreground_client_id = Some(1);
+    server.sync_foreground_client_state();
+    assert_eq!(
+        server.app.state.host_terminal_theme.background,
+        Some(dark.into())
+    );
+    server.clients.get_mut(&2).unwrap().connected_at =
+        Instant::now().checked_sub(HOST_THEME_REPORT_GRACE).unwrap();
+    server.foreground_client_id = Some(2);
+    server.sync_foreground_client_state();
+    assert_eq!(server.app.state.host_terminal_theme.background, None);
+}
+
+#[test]
 fn terminal_clients_store_known_cell_geometry_independently_of_pixel_mouse() {
     let mut server = test_headless_server();
 
