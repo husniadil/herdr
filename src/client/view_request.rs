@@ -65,7 +65,10 @@ pub fn extract_launch_view_args(
                 value
             }
             None => {
-                let Some(value) = args.get(index + 1) else {
+                // A following option is not this one's value: taken as one,
+                // `--workspace --client-tag=t` dropped the tag in silence.
+                let Some(value) = args.get(index + 1).filter(|value| !value.starts_with('-'))
+                else {
                     return Err(format!("missing value for {flag}"));
                 };
                 index += 2;
@@ -83,6 +86,19 @@ pub fn extract_launch_view_args(
                 .map_err(|error| format!("invalid {CLIENT_TAG_FLAG}: {error}"))?;
         }
         *slot = Some(value);
+    }
+    // Stripped from in front of a subcommand, the flags left one that no longer
+    // reaches the CLI, and a client was launched in its place.
+    let names_a_subcommand = cleaned
+        .iter()
+        .enumerate()
+        .skip(1)
+        .take_while(|(_, arg)| arg.as_str() != "--")
+        .any(|(index, arg)| !arg.starts_with('-') && !(index == 1 && arg == "client"));
+    if request != ClientViewRequest::default() && names_a_subcommand {
+        return Err(format!(
+            "{WORKSPACE_FLAG} and {CLIENT_TAG_FLAG} apply only to launching a client"
+        ));
     }
     Ok((cleaned, request))
 }
@@ -146,5 +162,39 @@ mod tests {
                 .is_err()
         );
         assert!(extract_launch_view_args(&args(&["herdr", "--client-tag="])).is_err());
+    }
+
+    #[test]
+    fn a_flag_does_not_take_the_next_flag_as_its_value() {
+        assert_eq!(
+            extract_launch_view_args(&args(&["herdr", "--workspace", "--client-tag=browser-1"])),
+            Err("missing value for --workspace".to_owned())
+        );
+        assert_eq!(
+            extract_launch_view_args(&args(&["herdr", "--client-tag", "--workspace", "w_1"])),
+            Err("missing value for --client-tag".to_owned())
+        );
+        // The `=` form still takes any valid tag.
+        let (_, request) =
+            extract_launch_view_args(&args(&["herdr", "--client-tag=-dash"])).unwrap();
+        assert_eq!(request.client_tag.as_deref(), Some("-dash"));
+    }
+
+    #[test]
+    fn the_flags_before_a_subcommand_are_refused_rather_than_dropped() {
+        // Stripped, they left `herdr workspace list`, which no longer reaches the
+        // CLI and launched a client instead.
+        for input in [
+            &["herdr", "--workspace", "w_1", "workspace", "list"][..],
+            &["herdr", "--client-tag=t", "pane", "list"][..],
+        ] {
+            assert!(extract_launch_view_args(&args(input)).is_err(), "{input:?}");
+        }
+        // Other launch options keep their own handling.
+        let input = args(&["herdr", "--version"]);
+        assert_eq!(
+            extract_launch_view_args(&input).unwrap(),
+            (input, ClientViewRequest::default())
+        );
     }
 }

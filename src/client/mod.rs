@@ -40,7 +40,7 @@ mod terminal_sessions;
 mod terminal_setup;
 mod timer;
 mod transport;
-mod view_request;
+pub(crate) mod view_request;
 
 #[cfg(test)]
 use clipboard_forwarding::decode_clipboard_payload;
